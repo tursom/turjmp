@@ -10,6 +10,7 @@ import (
 	"github.com/tursom/turjmp/internal/api/handler"
 	"github.com/tursom/turjmp/internal/api/middleware"
 	"github.com/tursom/turjmp/internal/config"
+	sshproxy "github.com/tursom/turjmp/internal/proxy/ssh"
 	"github.com/tursom/turjmp/internal/repository"
 )
 
@@ -24,6 +25,8 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	r.Use(requestLogger(log))
 
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
+	// WebSocket 终端路由：浏览器通过 WebSocket 协议直连 SSH 代理，实现 Web 终端功能
+	r.GET("/ws/terminal", gin.WrapH(sshproxy.NewWebTerminal(cfg)))
 	r.GET("/health/ready", func(c *gin.Context) {
 		if err := db.Ping(); err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "error": err.Error()})
@@ -37,6 +40,13 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	v1.POST("/auth/login", h.Login)
 	v1.POST("/auth/refresh", h.Refresh)
 	v1.POST("/authentication/super-connection-tokens/verify/", h.VerifyConnectionToken)
+	// Proxy API 路由组：供内部 SSH 代理组件调用的接口，认证方式为 X-Proxy-Auth 请求头（共享密钥 + IP 白名单）
+	v1.POST("/proxy/sessions", h.ProxyCreateSession)
+	v1.PATCH("/proxy/sessions/:id", h.ProxyUpdateSession)
+	v1.GET("/proxy/ssh/host-keys", h.ProxyHostKeys)
+	v1.GET("/proxy/settings/:key", h.ProxyGetSetting)
+	v1.GET("/proxy/command-filter-acls", h.ProxyCommandFilterACLs)
+	v1.POST("/proxy/audit-logs", h.ProxyCreateAuditLog)
 
 	authOnly := v1.Group("/auth", middleware.Auth(h.Auth))
 	authOnly.POST("/logout", h.Logout)
@@ -83,6 +93,8 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	secure.PATCH("/sessions/:id", h.UpdateSession)
 
 	secure.GET("/settings", h.ListSettings)
+	// SSH 主机密钥指纹（公钥摘要）查询接口，需 JWT + RBAC 认证
+	secure.GET("/settings/ssh-fingerprint", h.SSHFingerprint)
 	secure.GET("/settings/:key", h.GetSetting)
 	secure.PUT("/settings/:key", h.UpdateSetting)
 	secure.GET("/audit-logs", h.ListAuditLogs)

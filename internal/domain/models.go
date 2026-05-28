@@ -166,3 +166,31 @@ type AuditLog struct {
 	Detail     string    `db:"detail" json:"detail"`
 	CreatedAt  time.Time `db:"created_at" json:"created_at"`
 }
+
+// HostKey SSH 主机密钥模型，存储代理服务器生成的密钥对，用于 SSH 连接时验证身份
+type HostKey struct {
+	ID int64 `db:"id" json:"id"`
+	// 密钥算法类型，如 ssh-rsa、ecdsa-sha2-nistp256
+	Algorithm string `db:"algorithm" json:"algorithm"`
+	// 密钥指纹，用于展示和验证密钥唯一性
+	Fingerprint string `db:"fingerprint" json:"fingerprint"`
+	// 私钥内容（PEM 格式），JSON 序列化时隐藏
+	PrivateKey string `db:"private_key" json:"-"`
+	// 公钥内容（OpenSSH 格式），用于远程主机 authorized_keys
+	PublicKey string `db:"public_key" json:"public_key"`
+	// 密钥创建时间
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+}
+
+// CommandFilterACL 命令过滤规则模型，定义 SSH 会话中允许或拒绝执行哪些命令
+type CommandFilterACL struct {
+	ID int64 `db:"id" json:"id"`
+	// 规则名称，用于标识和展示
+	Name string `db:"name" json:"name"`
+	// 正则表达式模式，匹配 SSH 会话中执行的命令
+	Pattern string `db:"pattern" json:"pattern"`
+	// 规则动作：allow 放行，deny 拒绝
+	Action string `db:"action" json:"action"`
+	// 规则创建时间
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+}

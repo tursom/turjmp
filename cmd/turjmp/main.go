@@ -16,6 +16,8 @@ import (
 	"github.com/tursom/turjmp/internal/config"
 	"github.com/tursom/turjmp/internal/crypto"
 	"github.com/tursom/turjmp/internal/logging"
+	// SSH 代理服务实现，处理入站 SSH 连接并代理到目标主机
+	sshproxy "github.com/tursom/turjmp/internal/proxy/ssh"
 	"github.com/tursom/turjmp/internal/rbac"
 	"github.com/tursom/turjmp/internal/repository"
 	"github.com/tursom/turjmp/internal/server"
@@ -68,6 +70,8 @@ func main() {
 	errCh := make(chan error, 1)
 	var apiServer *server.Server
 	var apiDB *repository.DB
+	// SSH 代理服务器实例，监听并代理 SSH 连接
+	var sshServer *sshproxy.Server
 
 	if selected.api {
 		apiServer, apiDB, err = startAPI(cfg, log)
@@ -78,6 +82,17 @@ func main() {
 			if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
 				errCh <- fmt.Errorf("api server: %w", err)
 				return
+			}
+		}()
+	}
+	// SSH 代理角色启停：初始化 SSH 代理服务器并在 goroutine 中启动监听，异常时写入错误通道
+	if selected.sshProxy {
+		sshServer, err = sshproxy.NewServer(cfg)
+		must(err)
+		go func() {
+			log.Info("ssh_proxy_start", zap.String("addr", cfg.Proxy.SSH.Addr), zap.String("api_base_url", cfg.Proxy.APIBaseURL))
+			if err := sshServer.Start(ctx); err != nil {
+				errCh <- fmt.Errorf("ssh proxy: %w", err)
 			}
 		}()
 	}
@@ -96,6 +111,10 @@ func main() {
 		if err := server.Shutdown(context.Background(), cfg.HTTP.ShutdownTimeout(), apiServer.Shutdown); err != nil {
 			log.Error("api_shutdown_failed", zap.Error(err))
 		}
+	}
+	// 优雅关闭 SSH 代理服务器，释放端口和连接资源
+	if sshServer != nil {
+		sshServer.Stop()
 	}
 	log.Info("shutdown_complete")
 }
@@ -148,16 +167,16 @@ func startAPI(cfg config.Config, log *zap.Logger) (*server.Server, *repository.D
 		Tokens:      service.NewTokenService(store, box, cfg.ProxyAuth),
 		Settings:    settingService,
 		Sessions:    service.NewSessionService(store),
+		// 主机密钥管理服务，提供 SSH HostKey 的生成、存储和查询
+		HostKeys:    service.NewHostKeyService(store),
 		Store:       store,
 		Enforcer:    enforcer,
 	}
 	return server.New(cfg, log, db, h), db, nil
 }
 
+// startProxyStubs 为非 SSH 的代理角色（DB、RDP）输出占位日志，表示这些角色尚未实现实际逻辑
 func startProxyStubs(selected roles, log *zap.Logger) {
-	if selected.sshProxy {
-		log.Info("ssh_proxy_stub_started")
-	}
 	if selected.dbProxy {
 		log.Info("db_proxy_stub_started")
 	}

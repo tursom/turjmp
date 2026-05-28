@@ -32,6 +32,15 @@ type VerifyTokenResult struct {
 	User    domain.User            `json:"user"`
 	Asset   domain.Asset           `json:"asset"`
 	Account map[string]any         `json:"account"`
+	// Target 连接目标信息，包含资产地址、协议端口和协议类型，供代理组件建立连接使用
+	Target  VerifyTokenTarget      `json:"target"`
+}
+
+// VerifyTokenTarget 连接目标信息，描述验证通过后代理应该连接到哪里
+type VerifyTokenTarget struct {
+	Address  string `json:"address"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
 }
 
 func NewTokenService(store *repository.Store, box *crypto.SecretBox, cfg config.ProxyAuthConfig) *TokenService {
@@ -71,7 +80,7 @@ func (s *TokenService) Issue(userID int64, input IssueTokenInput) (domain.Connec
 }
 
 func (s *TokenService) Verify(value, proxySecret, remoteIP string) (VerifyTokenResult, error) {
-	if proxySecret == "" || proxySecret != s.cfg.Secret || !s.allowedIP(remoteIP) {
+	if !s.AuthorizeProxy(proxySecret, remoteIP) {
 		return VerifyTokenResult{}, domain.ErrUnauthorized
 	}
 	token, err := s.store.GetConnectionToken(value)
@@ -93,6 +102,17 @@ func (s *TokenService) Verify(value, proxySecret, remoteIP string) (VerifyTokenR
 	if err != nil {
 		return VerifyTokenResult{}, err
 	}
+	// 查询资产对应协议的端口号，若配置了平台协议则使用配置值
+	// 若为 SSH 协议且未查询到端口配置，则默认使用 22 端口
+	// 其他协议若未配置端口则返回错误
+	port, err := s.store.GetAssetProtocolPort(token.AssetID, token.Protocol)
+	if err != nil {
+		if token.Protocol == "ssh" {
+			port = 22
+		} else {
+			return VerifyTokenResult{}, err
+		}
+	}
 	secret, err := s.box.DecryptString(account.Secret)
 	if err != nil {
 		return VerifyTokenResult{}, err
@@ -108,6 +128,12 @@ func (s *TokenService) Verify(value, proxySecret, remoteIP string) (VerifyTokenR
 		Token: token,
 		User:  user,
 		Asset: asset,
+		// Target 包含代理建立连接所需的完整目标信息：资产地址、解析后的端口、协议类型
+		Target: VerifyTokenTarget{
+			Address:  asset.Address,
+			Port:     port,
+			Protocol: token.Protocol,
+		},
 		Account: map[string]any{
 			"id":            account.ID,
 			"username":      account.Username,
@@ -121,6 +147,13 @@ func (s *TokenService) Verify(value, proxySecret, remoteIP string) (VerifyTokenR
 			"db_name":       account.DBName,
 		},
 	}, nil
+}
+
+// AuthorizeProxy 验证代理请求的合法性
+// 同时校验代理密钥（X-Proxy-Auth）是否匹配配置的共享密钥，以及客户端 IP 是否在白名单内
+// 返回 true 表示请求来自受信任的代理组件
+func (s *TokenService) AuthorizeProxy(proxySecret, remoteIP string) bool {
+	return proxySecret != "" && proxySecret == s.cfg.Secret && s.allowedIP(remoteIP)
 }
 
 func (s *TokenService) allowedIP(remoteIP string) bool {

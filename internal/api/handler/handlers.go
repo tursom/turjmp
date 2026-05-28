@@ -21,6 +21,8 @@ type Handler struct {
 	Tokens      *service.TokenService
 	Settings    *service.SettingService
 	Sessions    *service.SessionService
+	// HostKeys 管理 SSH 主机密钥的生成、存储和签名操作，供代理组件使用
+	HostKeys    *service.HostKeyService
 	Store       *repository.Store
 	Enforcer    *casbin.Enforcer
 }
@@ -439,9 +441,14 @@ func (h *Handler) IssueConnectionToken(c *gin.Context) {
 	httpx.Created(c, gin.H{"token": token.Value, "expires_at": token.ExpiresAt, "expires_in": 300})
 }
 
+// VerifyConnectionToken 供 SSH 代理组件调用，验证连接令牌的有效性
+// 该接口通过 X-Proxy-Auth 请求头进行代理认证
+// 请求体包含连接令牌和发起连接的真实客户端 IP（remote_addr）
 func (h *Handler) VerifyConnectionToken(c *gin.Context) {
 	var req struct {
-		Token string `json:"token"`
+		Token      string `json:"token"`
+		// RemoteAddr 发起 SSH 连接的真实客户端地址，用于审计和 IP 白名单校验
+		RemoteAddr string `json:"remote_addr"`
 	}
 	if !middleware.RequireJSON(c, &req) {
 		return
@@ -452,6 +459,152 @@ func (h *Handler) VerifyConnectionToken(c *gin.Context) {
 		return
 	}
 	httpx.JSON(c, 200, result)
+}
+
+// SSHFingerprint 返回所有 SSH 主机密钥的指纹信息（公钥摘要）
+// 需要 JWT 认证和 RBAC 权限校验（secure 路由组）
+// 返回每个密钥的算法、SHA256 指纹和公钥字符串
+func (h *Handler) SSHFingerprint(c *gin.Context) {
+	keys, err := h.HostKeys.List()
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	out := make([]gin.H, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, gin.H{
+			"algorithm":   key.Algorithm,
+			"fingerprint": key.Fingerprint,
+			"public_key":  key.PublicKey,
+		})
+	}
+	httpx.JSON(c, 200, out)
+}
+
+// ProxyHostKeys 供代理组件获取所有 SSH 主机密钥（含私钥），用于代理服务器建立 SSH 连接
+// 认证方式：通过 X-Proxy-Auth 请求头进行代理认证（proxyAuthorized）
+// 与 SSHFingerprint 不同，此接口返回完整的私钥信息，仅限内部代理使用
+func (h *Handler) ProxyHostKeys(c *gin.Context) {
+	if !h.proxyAuthorized(c) {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return
+	}
+	keys, err := h.HostKeys.List()
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	out := make([]gin.H, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, gin.H{
+			"algorithm":   key.Algorithm,
+			"fingerprint": key.Fingerprint,
+			"private_key": key.PrivateKey,
+			"public_key":  key.PublicKey,
+		})
+	}
+	httpx.JSON(c, 200, out)
+}
+
+// ProxyCreateSession 供代理组件创建 SSH 会话记录
+// 认证方式：通过 X-Proxy-Auth 请求头进行代理认证
+// 请求体为 domain.Session 结构，包含用户、资产、账户、协议等会话元数据
+func (h *Handler) ProxyCreateSession(c *gin.Context) {
+	if !h.proxyAuthorized(c) {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return
+	}
+	var sess domain.Session
+	if !middleware.RequireJSON(c, &sess) {
+		return
+	}
+	created, err := h.Sessions.Create(sess)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.Created(c, created)
+}
+
+// ProxyUpdateSession 供代理组件更新 SSH 会话状态（结束标记、录像路径）
+// 认证方式：通过 X-Proxy-Auth 请求头进行代理认证
+// 请求参数：路径参数 id（会话ID），请求体 is_finished（是否结束）、recording_path（录像文件路径）
+func (h *Handler) ProxyUpdateSession(c *gin.Context) {
+	if !h.proxyAuthorized(c) {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return
+	}
+	var req struct {
+		IsFinished    bool   `json:"is_finished"`
+		RecordingPath string `json:"recording_path"`
+	}
+	if !middleware.RequireJSON(c, &req) {
+		return
+	}
+	session, err := h.Sessions.Update(pathID(c, "id"), req.IsFinished, req.RecordingPath)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, session)
+}
+
+// ProxyGetSetting 供代理组件获取指定 key 的系统配置项
+// 认证方式：通过 X-Proxy-Auth 请求头进行代理认证
+// 路径参数 key 对应 settings 表中的配置键名
+func (h *Handler) ProxyGetSetting(c *gin.Context) {
+	if !h.proxyAuthorized(c) {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return
+	}
+	setting, err := h.Store.GetSetting(c.Param("key"))
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, setting)
+}
+
+// ProxyCommandFilterACLs 供代理组件获取命令过滤规则列表
+// 认证方式：通过 X-Proxy-Auth 请求头进行代理认证
+// 返回所有 command_filter_acls 表中的 ACL 规则，代理组件使用这些规则拦截/放行用户执行的命令
+func (h *Handler) ProxyCommandFilterACLs(c *gin.Context) {
+	if !h.proxyAuthorized(c) {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return
+	}
+	rules, err := h.Store.ListCommandFilterACLs()
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, rules)
+}
+
+// ProxyCreateAuditLog 供代理组件写入审计日志
+// 认证方式：通过 X-Proxy-Auth 请求头进行代理认证
+// 请求体包含：user_id（操作用户ID，可为空）、action（操作类型）、resource（资源标识）、remote_addr（客户端地址）、detail（详细信息）
+// 该接口用于代理组件记录用户通过跳板机执行的操作行为
+func (h *Handler) ProxyCreateAuditLog(c *gin.Context) {
+	if !h.proxyAuthorized(c) {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return
+	}
+	var req struct {
+		UserID     *int64 `json:"user_id"`
+		Action     string `json:"action"`
+		Resource   string `json:"resource"`
+		RemoteAddr string `json:"remote_addr"`
+		Detail     string `json:"detail"`
+	}
+	if !middleware.RequireJSON(c, &req) {
+		return
+	}
+	if err := h.Store.Audit(req.UserID, req.Action, req.Resource, req.RemoteAddr, req.Detail); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.NoContent(c)
 }
 
 func (h *Handler) ListSessions(c *gin.Context) {
@@ -549,4 +702,11 @@ func pathID(c *gin.Context, name string) int64 {
 		return 0
 	}
 	return id
+}
+
+// proxyAuthorized 校验代理请求的合法性
+// 从 X-Proxy-Auth 请求头提取代理密钥，结合客户端 IP 进行双重验证
+// 返回 true 表示该请求来自合法的代理组件
+func (h *Handler) proxyAuthorized(c *gin.Context) bool {
+	return h.Tokens.AuthorizeProxy(c.GetHeader("X-Proxy-Auth"), c.ClientIP())
 }

@@ -244,6 +244,18 @@ func (s *Store) GetAsset(id int64) (domain.Asset, error) {
 	return a, notFound(err)
 }
 
+// GetAssetProtocolPort 通过资产关联的平台协议配置，查询指定协议对应的端口号
+// 查询逻辑：JOIN platform_protocols 表，根据 asset_id 和 protocol name 获取端口
+func (s *Store) GetAssetProtocolPort(assetID int64, protocol string) (int, error) {
+	var port int
+	err := s.db.Get(&port, s.query(`SELECT pp.port
+		FROM assets a
+		JOIN platform_protocols pp ON pp.platform_id = a.platform_id
+		WHERE a.id = ? AND pp.name = ?
+		LIMIT 1`), assetID, protocol)
+	return port, notFound(err)
+}
+
 func (s *Store) ListAssets() ([]domain.AssetWithPlatform, error) {
 	var assets []domain.AssetWithPlatform
 	err := s.db.Select(&assets, `SELECT a.*, p.name AS platform_name, p.type AS platform_type
@@ -509,6 +521,37 @@ func (s *Store) Audit(userID *int64, action, resource, remoteAddr, detail string
 	_, err := s.db.Exec(s.query(`INSERT INTO audit_logs (user_id, action, resource, remote_addr, detail)
 		VALUES (?, ?, ?, ?, ?)`), userID, action, resource, remoteAddr, detail)
 	return err
+}
+
+// ListHostKeys 查询所有 SSH 主机密钥记录，按 ID 排序
+func (s *Store) ListHostKeys() ([]domain.HostKey, error) {
+	var keys []domain.HostKey
+	err := s.db.Select(&keys, `SELECT * FROM host_keys ORDER BY id`)
+	return keys, err
+}
+
+// GetHostKeyByAlgorithm 按算法名称（如 ssh-ed25519、ssh-rsa）查询主机密钥记录
+// 若存在多条同算法记录，取 ID 最小的第一条
+func (s *Store) GetHostKeyByAlgorithm(algorithm string) (domain.HostKey, error) {
+	var key domain.HostKey
+	err := s.db.Get(&key, s.query(`SELECT * FROM host_keys WHERE algorithm = ? ORDER BY id LIMIT 1`), algorithm)
+	return key, notFound(err)
+}
+
+// CreateHostKey 创建一条新的 SSH 主机密钥记录
+// 存储算法名称、SHA256 指纹、PEM 格式私钥和 OpenSSH 格式公钥
+func (s *Store) CreateHostKey(key *domain.HostKey) error {
+	q := s.query(`INSERT INTO host_keys (algorithm, fingerprint, private_key, public_key)
+		VALUES (?, ?, ?, ?) RETURNING *`)
+	return notFound(s.db.Get(key, q, key.Algorithm, key.Fingerprint, key.PrivateKey, key.PublicKey))
+}
+
+// ListCommandFilterACLs 查询所有命令过滤 ACL 规则，按 ID 排序
+// 这些规则供 SSH 代理组件用于拦截或放行用户在跳板机上执行的命令
+func (s *Store) ListCommandFilterACLs() ([]domain.CommandFilterACL, error) {
+	var rules []domain.CommandFilterACL
+	err := s.db.Select(&rules, `SELECT * FROM command_filter_acls ORDER BY id`)
+	return rules, err
 }
 
 func withTx(db *sqlx.DB, fn func(*sqlx.Tx) error) error {

@@ -21,6 +21,19 @@ proxy_auth:
   allowed_ips:
     - "127.0.0.1"
     - "::1"
+# 代理配置：SSH 代理服务器监听地址与连接参数
+proxy:
+  # API 基础地址，SSH 代理通过此地址回调认证和 Token 验证接口
+  api_base_url: "http://127.0.0.1:8080"
+  ssh:
+    # SSH 代理监听地址
+    addr: ":2222"
+    # 最大并发连接数，超出后拒绝新连接
+    max_connections: 100
+    # 空闲超时秒数（15 分钟），客户端无操作自动断开
+    idle_timeout_seconds: 900
+    # 连接目标主机超时秒数（15 秒）
+    connect_timeout_seconds: 15
 totp:
   issuer: "Turjmp"
 logging:
@@ -29,4 +42,3 @@ logging:
 rate_limit:
   enabled: true
   requests_per_second: 20
-
