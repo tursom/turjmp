@@ -1,3 +1,5 @@
+// Package api 提供 Turjmp SSH 跳板机的 HTTP API 路由注册和中间件编排。
+// 路由采用分组设计：公开路由（健康检查、登录、代理接口）、JWT 认证路由和 JWT+RBAC 鉴权路由。
 package api
 
 import (
@@ -14,19 +16,25 @@ import (
 	"github.com/tursom/turjmp/internal/repository"
 )
 
+// NewRouter 创建并配置 Gin 路由引擎，注册全局中间件、健康检查端点、Prometheus指标端点、
+// 公开 API（登录/刷新/代理）、JWT认证端点（登出/MFA）和 JWT+RBAC 安全端点（用户/角色/资产/权限/会话/配置/审计）。
+// cfg 为应用配置，log 为日志实例，db 为数据库连接，h 为聚合了所有业务服务的 Handler 实例。
 func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler.Handler) *gin.Engine {
 	if cfg.App.Environment == "prod" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
+	// 全局中间件链：Recovery → Metrics → RateLimit → RequestLogger
 	r.Use(gin.Recovery())
 	r.Use(middleware.Metrics())
 	r.Use(middleware.RateLimit(cfg.RateLimit))
 	r.Use(requestLogger(log))
 
+	// 公开路由组（无需认证）
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	// WebSocket 终端路由：浏览器通过 WebSocket 协议直连 SSH 代理，实现 Web 终端功能
 	r.GET("/ws/terminal", gin.WrapH(sshproxy.NewWebTerminal(cfg)))
+	// /health/ready：就绪检查端点，验证数据库连接可用性（无需认证）
 	r.GET("/health/ready", func(c *gin.Context) {
 		if err := db.Ping(); err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "error": err.Error()})
@@ -34,9 +42,12 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
+	// /metrics：Prometheus 指标采集端点，由 promhttp 暴露（无需认证）
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
+	// v1：API 版本 1 路由组，挂载于 /api/v1
 	v1 := r.Group("/api/v1")
+	// 公开认证路由（无需 JWT）：登录、刷新令牌、令牌验证
 	v1.POST("/auth/login", h.Login)
 	v1.POST("/auth/refresh", h.Refresh)
 	v1.POST("/authentication/super-connection-tokens/verify/", h.VerifyConnectionToken)
@@ -48,11 +59,13 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	v1.GET("/proxy/command-filter-acls", h.ProxyCommandFilterACLs)
 	v1.POST("/proxy/audit-logs", h.ProxyCreateAuditLog)
 
+	// authOnly：仅需 JWT 认证的路由组（无需 RBAC），用于登出和 MFA 操作
 	authOnly := v1.Group("/auth", middleware.Auth(h.Auth))
 	authOnly.POST("/logout", h.Logout)
 	authOnly.POST("/mfa/setup", h.MFASetup)
 	authOnly.POST("/mfa/verify", h.MFAVerify)
 
+	// secure：需 JWT 认证 + Casbin RBAC 鉴权的安全路由组，覆盖用户/角色/资产/权限/会话/配置/审计管理
 	secure := v1.Group("", middleware.Auth(h.Auth), middleware.RBAC(h.Enforcer))
 	secure.GET("/users", h.ListUsers)
 	secure.POST("/users", h.CreateUser)
@@ -101,6 +114,8 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	return r
 }
 
+// requestLogger 是 HTTP 请求日志中间件，使用 zap 记录每个请求的方法、路径、状态码和客户端 IP。
+// 该中间件在请求处理完成后记录日志，不影响请求处理流程。
 func requestLogger(log *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()

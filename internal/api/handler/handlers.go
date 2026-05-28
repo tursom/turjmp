@@ -1,3 +1,6 @@
+// Package handler 提供 HTTP API 请求处理器，将 Gin 路由映射到对应的业务服务层方法。
+// Handler 结构体聚合了所有业务服务实例，每个公开方法对应一个 API 端点，负责请求参数提取、
+// 业务逻辑调用和统一响应格式化。
 package handler
 
 import (
@@ -13,20 +16,35 @@ import (
 	"github.com/tursom/turjmp/internal/service"
 )
 
+// Handler 聚合所有业务服务实例和基础设施依赖，作为 HTTP 路由处理器的接收者。
+// 每个公开方法对应一个 API 端点，通过 Gin 的 c *gin.Context 获取请求参数并返回响应。
 type Handler struct {
+	// Auth 认证服务：处理用户登录、登出、Token 刷新和 MFA 配置
 	Auth        *service.AuthService
+	// Users 用户管理服务：处理用户的 CRUD 操作及角色关联
 	Users       *service.UserService
+	// Assets 资产管理服务：处理资产、资产组和账户的 CRUD 操作及树形结构查询
 	Assets      *service.AssetService
+	// Permissions 权限管理服务：处理权限规则的 CRUD 操作
 	Permissions *service.PermissionService
+	// Tokens 临时令牌服务：处理连接令牌的签发、验证和代理认证
 	Tokens      *service.TokenService
+	// Settings 配置管理服务：处理系统级配置项的读写操作
 	Settings    *service.SettingService
+	// Sessions 会话管理服务：处理 SSH 会话记录的 CRUD 操作
 	Sessions    *service.SessionService
 	// HostKeys 管理 SSH 主机密钥的生成、存储和签名操作，供代理组件使用
 	HostKeys    *service.HostKeyService
+	// Store 数据存储聚合：提供对数据库各表的直接读写操作
 	Store       *repository.Store
+	// Enforcer Casbin 权限执行器：用于角色权限策略的管理和查询
 	Enforcer    *casbin.Enforcer
 }
 
+// Login 处理用户登录请求。
+// 端点：POST /api/v1/auth/login（无需认证）
+// 请求体：{username, password, mfa_code}，若用户未启用 MFA 则 mfa_code 可为空
+// 成功返回 access_token 和 refresh_token
 func (h *Handler) Login(c *gin.Context) {
 	var req struct {
 		Username string `json:"username"`
@@ -44,6 +62,9 @@ func (h *Handler) Login(c *gin.Context) {
 	httpx.JSON(c, 200, result)
 }
 
+// Refresh 使用 refresh_token 刷新 access_token。
+// 端点：POST /api/v1/auth/refresh（无需认证）
+// 请求体：{refresh_token}，成功返回新的 access_token 和 refresh_token
 func (h *Handler) Refresh(c *gin.Context) {
 	var req struct {
 		RefreshToken string `json:"refresh_token"`
@@ -59,6 +80,8 @@ func (h *Handler) Refresh(c *gin.Context) {
 	httpx.JSON(c, 200, result)
 }
 
+// Logout 处理用户登出请求，撤销当前用户的所有 refresh_token。
+// 端点：POST /api/v1/auth/logout（需 JWT 认证）
 func (h *Handler) Logout(c *gin.Context) {
 	principal, err := httpx.MustPrincipal(c)
 	if err != nil {
@@ -72,6 +95,9 @@ func (h *Handler) Logout(c *gin.Context) {
 	httpx.NoContent(c)
 }
 
+// MFASetup 为当前登录用户初始化 MFA（多因素认证），生成 TOTP 密钥和二维码信息。
+// 端点：POST /api/v1/auth/mfa/setup（需 JWT 认证）
+// 返回 setup 信息包含 secret 和二维码 URL
 func (h *Handler) MFASetup(c *gin.Context) {
 	principal, err := httpx.MustPrincipal(c)
 	if err != nil {
@@ -86,6 +112,9 @@ func (h *Handler) MFASetup(c *gin.Context) {
 	httpx.JSON(c, 200, setup)
 }
 
+// MFAVerify 验证 TOTP 验证码，完成 MFA 绑定。
+// 端点：POST /api/v1/auth/mfa/verify（需 JWT 认证）
+// 请求体：{code}，验证成功后用户登录即需提供 MFA 验证码
 func (h *Handler) MFAVerify(c *gin.Context) {
 	var req struct {
 		Code string `json:"code"`
@@ -105,6 +134,8 @@ func (h *Handler) MFAVerify(c *gin.Context) {
 	httpx.NoContent(c)
 }
 
+// ListUsers 查询所有用户列表。
+// 端点：GET /api/v1/users（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) ListUsers(c *gin.Context) {
 	users, err := h.Users.List()
 	if err != nil {
@@ -114,6 +145,9 @@ func (h *Handler) ListUsers(c *gin.Context) {
 	httpx.JSON(c, 200, users)
 }
 
+// CreateUser 创建新用户。
+// 端点：POST /api/v1/users（需 JWT 认证 + RBAC 鉴权）
+// 请求体：{username, password, roles}
 func (h *Handler) CreateUser(c *gin.Context) {
 	var req service.CreateUserInput
 	if !middleware.RequireJSON(c, &req) {
@@ -127,6 +161,8 @@ func (h *Handler) CreateUser(c *gin.Context) {
 	httpx.Created(c, user)
 }
 
+// GetUser 根据 ID 查询单个用户及其关联角色。
+// 端点：GET /api/v1/users/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) GetUser(c *gin.Context) {
 	user, roles, err := h.Users.Get(pathID(c, "id"))
 	if err != nil {
@@ -136,6 +172,8 @@ func (h *Handler) GetUser(c *gin.Context) {
 	httpx.JSON(c, 200, gin.H{"user": user, "roles": roles})
 }
 
+// UpdateUser 更新指定用户的信息（用户名、密码、角色等）。
+// 端点：PUT /api/v1/users/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) UpdateUser(c *gin.Context) {
 	var req service.UpdateUserInput
 	if !middleware.RequireJSON(c, &req) {
@@ -149,6 +187,8 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 	httpx.JSON(c, 200, user)
 }
 
+// DeleteUser 删除指定用户。
+// 端点：DELETE /api/v1/users/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) DeleteUser(c *gin.Context) {
 	if err := h.Users.Delete(pathID(c, "id")); err != nil {
 		httpx.Error(c, err)
@@ -157,6 +197,8 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 	httpx.NoContent(c)
 }
 
+// ListRoles 查询所有角色列表。
+// 端点：GET /api/v1/roles（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) ListRoles(c *gin.Context) {
 	roles, err := h.Store.ListRoles()
 	if err != nil {
@@ -166,6 +208,9 @@ func (h *Handler) ListRoles(c *gin.Context) {
 	httpx.JSON(c, 200, roles)
 }
 
+// CreateRole 创建新角色。
+// 端点：POST /api/v1/roles（需 JWT 认证 + RBAC 鉴权）
+// 请求体：{name}
 func (h *Handler) CreateRole(c *gin.Context) {
 	var role domain.Role
 	if !middleware.RequireJSON(c, &role) {
@@ -178,6 +223,8 @@ func (h *Handler) CreateRole(c *gin.Context) {
 	httpx.Created(c, role)
 }
 
+// GetRole 根据 ID 查询角色信息及其关联的 Casbin 权限策略。
+// 端点：GET /api/v1/roles/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) GetRole(c *gin.Context) {
 	role, err := h.Store.GetRole(pathID(c, "id"))
 	if err != nil {
@@ -192,6 +239,9 @@ func (h *Handler) GetRole(c *gin.Context) {
 	httpx.JSON(c, 200, gin.H{"role": role, "permissions": policies})
 }
 
+// UpdateRole 更新角色名称。
+// 端点：PUT /api/v1/roles/:id（需 JWT 认证 + RBAC 鉴权）
+// 请求体：{name}
 func (h *Handler) UpdateRole(c *gin.Context) {
 	var role domain.Role
 	if !middleware.RequireJSON(c, &role) {
@@ -205,6 +255,8 @@ func (h *Handler) UpdateRole(c *gin.Context) {
 	httpx.JSON(c, 200, role)
 }
 
+// DeleteRole 删除角色。若角色已被分配给用户，删除将失败。
+// 端点：DELETE /api/v1/roles/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) DeleteRole(c *gin.Context) {
 	if err := h.Store.DeleteRole(pathID(c, "id")); err != nil {
 		httpx.Error(c, err)
@@ -213,6 +265,9 @@ func (h *Handler) DeleteRole(c *gin.Context) {
 	httpx.NoContent(c)
 }
 
+// SetRolePermissions 为指定角色设置 Casbin 权限策略。先清除该角色的所有旧策略，再写入新策略。
+// 端点：POST /api/v1/roles/:id/permissions（需 JWT 认证 + RBAC 鉴权）
+// 请求体：{permissions: [{path, method}]}，成功后返回更新后的策略列表
 func (h *Handler) SetRolePermissions(c *gin.Context) {
 	role, err := h.Store.GetRole(pathID(c, "id"))
 	if err != nil {
@@ -247,6 +302,8 @@ func (h *Handler) SetRolePermissions(c *gin.Context) {
 	httpx.JSON(c, 200, policies)
 }
 
+// ListPlatforms 查询所有资产平台列表（如 Linux、Windows 等）。
+// 端点：GET /api/v1/platforms（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) ListPlatforms(c *gin.Context) {
 	platforms, err := h.Assets.ListPlatforms()
 	if err != nil {
@@ -256,6 +313,8 @@ func (h *Handler) ListPlatforms(c *gin.Context) {
 	httpx.JSON(c, 200, platforms)
 }
 
+// ListAssets 查询所有资产列表。
+// 端点：GET /api/v1/assets（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) ListAssets(c *gin.Context) {
 	assets, err := h.Assets.ListAssets()
 	if err != nil {
@@ -265,6 +324,9 @@ func (h *Handler) ListAssets(c *gin.Context) {
 	httpx.JSON(c, 200, assets)
 }
 
+// CreateAsset 创建新资产（服务器节点）。
+// 端点：POST /api/v1/assets（需 JWT 认证 + RBAC 鉴权）
+// 请求体包含资产名称、IP、端口、平台ID、资产组ID、描述等信息
 func (h *Handler) CreateAsset(c *gin.Context) {
 	var asset domain.Asset
 	if !middleware.RequireJSON(c, &asset) {
@@ -278,6 +340,8 @@ func (h *Handler) CreateAsset(c *gin.Context) {
 	httpx.Created(c, created)
 }
 
+// GetAsset 根据 ID 查询单个资产详情。
+// 端点：GET /api/v1/assets/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) GetAsset(c *gin.Context) {
 	asset, err := h.Assets.GetAsset(pathID(c, "id"))
 	if err != nil {
@@ -287,6 +351,8 @@ func (h *Handler) GetAsset(c *gin.Context) {
 	httpx.JSON(c, 200, asset)
 }
 
+// UpdateAsset 更新指定资产的信息。
+// 端点：PUT /api/v1/assets/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) UpdateAsset(c *gin.Context) {
 	var asset domain.Asset
 	if !middleware.RequireJSON(c, &asset) {
@@ -300,6 +366,8 @@ func (h *Handler) UpdateAsset(c *gin.Context) {
 	httpx.JSON(c, 200, updated)
 }
 
+// DeleteAsset 删除指定资产及其关联的账户信息。
+// 端点：DELETE /api/v1/assets/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) DeleteAsset(c *gin.Context) {
 	if err := h.Assets.DeleteAsset(pathID(c, "id")); err != nil {
 		httpx.Error(c, err)
@@ -308,6 +376,8 @@ func (h *Handler) DeleteAsset(c *gin.Context) {
 	httpx.NoContent(c)
 }
 
+// AssetTree 查询资产树状结构，按资产组层次组织所有资产。
+// 端点：GET /api/v1/assets/tree（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) AssetTree(c *gin.Context) {
 	tree, err := h.Assets.Tree()
 	if err != nil {
@@ -317,6 +387,8 @@ func (h *Handler) AssetTree(c *gin.Context) {
 	httpx.JSON(c, 200, tree)
 }
 
+// ListAccounts 查询指定资产下的所有 SSH 账户。
+// 端点：GET /api/v1/assets/:id/accounts（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) ListAccounts(c *gin.Context) {
 	accounts, err := h.Assets.ListAccounts(pathID(c, "id"))
 	if err != nil {
@@ -326,6 +398,8 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 	httpx.JSON(c, 200, accounts)
 }
 
+// CreateAccount 为指定资产创建 SSH 账户（含用户名、密码/密钥等信息）。
+// 端点：POST /api/v1/assets/:id/accounts（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) CreateAccount(c *gin.Context) {
 	var req service.AccountInput
 	if !middleware.RequireJSON(c, &req) {
@@ -339,6 +413,8 @@ func (h *Handler) CreateAccount(c *gin.Context) {
 	httpx.Created(c, account)
 }
 
+// GetAccount 查询指定资产的指定账户详情（敏感字段 secret、passphrase 已脱敏）。
+// 端点：GET /api/v1/assets/:id/accounts/:aid（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) GetAccount(c *gin.Context) {
 	account, err := h.Store.GetAssetAccount(pathID(c, "id"), pathID(c, "aid"))
 	if err != nil {
@@ -350,6 +426,8 @@ func (h *Handler) GetAccount(c *gin.Context) {
 	httpx.JSON(c, 200, account)
 }
 
+// UpdateAccount 更新指定资产的指定账户信息。
+// 端点：PUT /api/v1/assets/:id/accounts/:aid（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) UpdateAccount(c *gin.Context) {
 	var req service.AccountInput
 	if !middleware.RequireJSON(c, &req) {
@@ -363,6 +441,8 @@ func (h *Handler) UpdateAccount(c *gin.Context) {
 	httpx.JSON(c, 200, account)
 }
 
+// DeleteAccount 删除指定资产的指定账户。
+// 端点：DELETE /api/v1/assets/:id/accounts/:aid（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) DeleteAccount(c *gin.Context) {
 	if err := h.Assets.DeleteAccount(pathID(c, "id"), pathID(c, "aid")); err != nil {
 		httpx.Error(c, err)
@@ -371,6 +451,8 @@ func (h *Handler) DeleteAccount(c *gin.Context) {
 	httpx.NoContent(c)
 }
 
+// ListPermissions 查询所有权限规则列表。
+// 端点：GET /api/v1/permissions（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) ListPermissions(c *gin.Context) {
 	permissions, err := h.Permissions.List()
 	if err != nil {
@@ -380,6 +462,8 @@ func (h *Handler) ListPermissions(c *gin.Context) {
 	httpx.JSON(c, 200, permissions)
 }
 
+// CreatePermission 创建新的权限规则（关联用户/角色到资产/账户）。
+// 端点：POST /api/v1/permissions（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) CreatePermission(c *gin.Context) {
 	var req service.PermissionInput
 	if !middleware.RequireJSON(c, &req) {
@@ -393,6 +477,8 @@ func (h *Handler) CreatePermission(c *gin.Context) {
 	httpx.Created(c, permission)
 }
 
+// GetPermission 查询指定权限规则及其关联的资源授权链路。
+// 端点：GET /api/v1/permissions/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) GetPermission(c *gin.Context) {
 	permission, links, err := h.Permissions.Get(pathID(c, "id"))
 	if err != nil {
@@ -402,6 +488,8 @@ func (h *Handler) GetPermission(c *gin.Context) {
 	httpx.JSON(c, 200, gin.H{"permission": permission, "links": links})
 }
 
+// UpdatePermission 更新指定权限规则。
+// 端点：PUT /api/v1/permissions/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) UpdatePermission(c *gin.Context) {
 	var req service.PermissionInput
 	if !middleware.RequireJSON(c, &req) {
@@ -415,6 +503,8 @@ func (h *Handler) UpdatePermission(c *gin.Context) {
 	httpx.JSON(c, 200, permission)
 }
 
+// DeletePermission 删除指定权限规则。
+// 端点：DELETE /api/v1/permissions/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) DeletePermission(c *gin.Context) {
 	if err := h.Permissions.Delete(pathID(c, "id")); err != nil {
 		httpx.Error(c, err)
@@ -423,6 +513,9 @@ func (h *Handler) DeletePermission(c *gin.Context) {
 	httpx.NoContent(c)
 }
 
+// IssueConnectionToken 为当前用户签发一次性 SSH 连接令牌，用于代理组件验证连接请求。
+// 端点：POST /api/v1/authentication/connection-tokens/（需 JWT 认证 + RBAC 鉴权）
+// 请求体：{asset_id, account_id}，令牌有效期 5 分钟
 func (h *Handler) IssueConnectionToken(c *gin.Context) {
 	var req service.IssueTokenInput
 	if !middleware.RequireJSON(c, &req) {
@@ -607,6 +700,8 @@ func (h *Handler) ProxyCreateAuditLog(c *gin.Context) {
 	httpx.NoContent(c)
 }
 
+// ListSessions 查询所有 SSH 会话记录列表。
+// 端点：GET /api/v1/sessions（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) ListSessions(c *gin.Context) {
 	sessions, err := h.Sessions.List()
 	if err != nil {
@@ -616,6 +711,9 @@ func (h *Handler) ListSessions(c *gin.Context) {
 	httpx.JSON(c, 200, sessions)
 }
 
+// CreateSession 创建新的 SSH 会话记录。
+// 端点：POST /api/v1/sessions（需 JWT 认证 + RBAC 鉴权）
+// 请求体：{user_id, username, asset_id, asset_name, account_id, protocol, host, port, remote_addr}
 func (h *Handler) CreateSession(c *gin.Context) {
 	var sess domain.Session
 	if !middleware.RequireJSON(c, &sess) {
@@ -629,6 +727,8 @@ func (h *Handler) CreateSession(c *gin.Context) {
 	httpx.Created(c, created)
 }
 
+// GetSession 查询指定会话记录的详细信息。
+// 端点：GET /api/v1/sessions/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) GetSession(c *gin.Context) {
 	session, err := h.Sessions.Get(pathID(c, "id"))
 	if err != nil {
@@ -638,6 +738,9 @@ func (h *Handler) GetSession(c *gin.Context) {
 	httpx.JSON(c, 200, session)
 }
 
+// UpdateSession 更新会话记录（标记结束状态、录像路径等）。
+// 端点：PATCH /api/v1/sessions/:id（需 JWT 认证 + RBAC 鉴权）
+// 请求体：{is_finished, recording_path}
 func (h *Handler) UpdateSession(c *gin.Context) {
 	var req struct {
 		IsFinished    bool   `json:"is_finished"`
@@ -654,6 +757,8 @@ func (h *Handler) UpdateSession(c *gin.Context) {
 	httpx.JSON(c, 200, session)
 }
 
+// ListSettings 查询所有系统配置项列表。
+// 端点：GET /api/v1/settings（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) ListSettings(c *gin.Context) {
 	settings, err := h.Settings.List()
 	if err != nil {
@@ -663,6 +768,8 @@ func (h *Handler) ListSettings(c *gin.Context) {
 	httpx.JSON(c, 200, settings)
 }
 
+// GetSetting 根据 key 查询单个系统配置项的值。
+// 端点：GET /api/v1/settings/:key（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) GetSetting(c *gin.Context) {
 	setting, err := h.Settings.Get(c.Param("key"))
 	if err != nil {
@@ -672,6 +779,9 @@ func (h *Handler) GetSetting(c *gin.Context) {
 	httpx.JSON(c, 200, setting)
 }
 
+// UpdateSetting 更新指定 key 的系统配置项。
+// 端点：PUT /api/v1/settings/:key（需 JWT 认证 + RBAC 鉴权）
+// 请求体：{value}
 func (h *Handler) UpdateSetting(c *gin.Context) {
 	var req struct {
 		Value string `json:"value"`
@@ -687,6 +797,8 @@ func (h *Handler) UpdateSetting(c *gin.Context) {
 	httpx.JSON(c, 200, setting)
 }
 
+// ListAuditLogs 查询所有审计日志记录。
+// 端点：GET /api/v1/audit-logs（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) ListAuditLogs(c *gin.Context) {
 	logs, err := h.Store.ListAuditLogs()
 	if err != nil {
@@ -696,6 +808,8 @@ func (h *Handler) ListAuditLogs(c *gin.Context) {
 	httpx.JSON(c, 200, logs)
 }
 
+// pathID 从 Gin 路径参数中提取名为 name 的整数值（int64），解析失败时返回 0。
+// 用作 Handler 中从 URL 路径（如 /api/v1/users/:id）提取 ID 参数的辅助函数。
 func pathID(c *gin.Context, name string) int64 {
 	id, err := strconv.ParseInt(c.Param(name), 10, 64)
 	if err != nil {

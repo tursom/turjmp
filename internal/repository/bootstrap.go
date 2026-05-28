@@ -1,3 +1,7 @@
+// 包 repository 提供系统初始化与默认数据种子功能。
+//
+// 启动时按顺序自动创建默认数据：角色 → 平台 → 根节点 → 系统设置 → 管理员用户。
+// 所有操作均为幂等（已存在则跳过），确保可安全重复执行。
 package repository
 
 import (
@@ -7,6 +11,7 @@ import (
 	"github.com/tursom/turjmp/internal/domain"
 )
 
+// DefaultSetting 定义一条系统默认设置的结构，包含键、值、分类、标签、描述、控件类型和选项列表。
 type DefaultSetting struct {
 	Key         string
 	Value       string
@@ -17,6 +22,8 @@ type DefaultSetting struct {
 	Options     string
 }
 
+// BootstrapDefaults 执行系统初始化，按顺序创建默认角色、平台、根节点、系统设置和管理员账户。
+// 所有操作均为幂等：已存在的数据会被跳过，不会重复创建。
 func (s *Store) BootstrapDefaults() error {
 	for _, role := range defaultRoles {
 		if _, err := s.UpsertRole(role.name, role.description); err != nil {
@@ -56,6 +63,7 @@ func (s *Store) BootstrapDefaults() error {
 	return s.ensureAdmin()
 }
 
+// ensureAdmin 确保默认管理员账户（admin/admin123）存在，并赋予 super_admin 角色。
 func (s *Store) ensureAdmin() error {
 	if _, err := s.GetUserByUsername("admin"); err == nil {
 		return nil
@@ -83,6 +91,7 @@ func (s *Store) ensureAdmin() error {
 	return s.SetUserRoles(user.ID, []int64{role.ID})
 }
 
+// 预定义的四种默认角色：超级管理员、管理员、运维操作员、审计员。
 var defaultRoles = []struct {
 	name        string
 	description string
@@ -93,6 +102,7 @@ var defaultRoles = []struct {
 	{"auditor", "Session auditor"},
 }
 
+// 预定义的四种默认资产平台：Linux（SSH）、Windows（RDP）、MySQL、PostgreSQL。
 var defaultPlatforms = []struct {
 	name        string
 	typ         string
@@ -106,6 +116,7 @@ var defaultPlatforms = []struct {
 	{"PostgreSQL", "postgres", "PostgreSQL database", "postgres", 5432},
 }
 
+// DefaultSettings 返回系统所有的默认设置项，涵盖录制存储、代理连接限制、安全策略、SFTP 和通知等分类。
 func DefaultSettings() []DefaultSetting {
 	return []DefaultSetting{
 		{"recording.storage", `"local"`, "recording", "Recording Storage", "Recording storage backend", "select", `["local","s3","oss","cos"]`},
