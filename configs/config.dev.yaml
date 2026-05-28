@@ -1,0 +1,32 @@
+app:
+  name: Turjmp
+  environment: dev
+http:
+  addr: ":8080"
+  shutdown_timeout_seconds: 30
+database:
+  driver: sqlite
+  dsn: "file:turjmp.dev.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
+  migrations_dir: migrations/sqlite
+security:
+  encryption_key: "dev-only-change-me-32-byte-secret"
+  password_min_length: 8
+jwt:
+  private_key_path: ".turjmp/jwt_private.pem"
+  public_key_path: ".turjmp/jwt_public.pem"
+  access_ttl_seconds: 900
+  refresh_ttl_seconds: 604800
+proxy_auth:
+  secret: "dev-proxy-secret"
+  allowed_ips:
+    - "127.0.0.1"
+    - "::1"
+totp:
+  issuer: "Turjmp"
+logging:
+  level: debug
+  encoding: console
+rate_limit:
+  enabled: true
+  requests_per_second: 20
+

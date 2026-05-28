@@ -1,0 +1,9 @@
+bin/
+.turjmp/
+*.db
+*.db-shm
+*.db-wal
+recordings/
+
+.omc
+.sisyphus

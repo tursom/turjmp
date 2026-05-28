@@ -1,0 +1,31 @@
+app:
+  name: Turjmp
+  environment: prod
+http:
+  addr: ":8080"
+  shutdown_timeout_seconds: 30
+database:
+  driver: postgres
+  dsn: "postgres://turjmp:changeme@postgres:5432/turjmp?sslmode=disable"
+  migrations_dir: migrations/postgres
+security:
+  encryption_key: "replace-with-base64-or-32-byte-secret"
+  password_min_length: 12
+jwt:
+  private_key_path: "/keys/jwt_private.pem"
+  public_key_path: "/keys/jwt_public.pem"
+  access_ttl_seconds: 900
+  refresh_ttl_seconds: 604800
+proxy_auth:
+  secret: "replace-with-strong-shared-secret"
+  allowed_ips:
+    - "127.0.0.1"
+totp:
+  issuer: "Turjmp"
+logging:
+  level: info
+  encoding: json
+rate_limit:
+  enabled: true
+  requests_per_second: 50
+

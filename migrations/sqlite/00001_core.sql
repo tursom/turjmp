@@ -1,0 +1,303 @@
+-- +goose Up
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    password_hash TEXT NOT NULL,
+    mfa_enabled INTEGER NOT NULL DEFAULT 0,
+    mfa_secret TEXT NOT NULL DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    last_login_at TIMESTAMP NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE roles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE user_roles (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, role_id)
+);
+
+CREATE TABLE user_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    org_id INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE group_users (
+    group_id INTEGER NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (group_id, user_id)
+);
+
+CREATE TABLE platforms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    type TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE platform_protocols (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform_id INTEGER NOT NULL REFERENCES platforms(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    settings TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(platform_id, name)
+);
+
+CREATE TABLE nodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    parent_id INTEGER NULL REFERENCES nodes(id) ON DELETE SET NULL,
+    org_id INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    address TEXT NOT NULL,
+    platform_id INTEGER NOT NULL REFERENCES platforms(id),
+    node_id INTEGER NULL REFERENCES nodes(id) ON DELETE SET NULL,
+    comment TEXT NOT NULL DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE asset_nodes (
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    PRIMARY KEY (asset_id, node_id)
+);
+
+CREATE TABLE accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    username TEXT NOT NULL,
+    secret TEXT NOT NULL DEFAULT '',
+    secret_type TEXT NOT NULL DEFAULT 'password',
+    ssh_key_type TEXT NOT NULL DEFAULT '',
+    passphrase TEXT NOT NULL DEFAULT '',
+    su_enabled INTEGER NOT NULL DEFAULT 0,
+    su_method TEXT NOT NULL DEFAULT '',
+    su_account_id INTEGER NULL REFERENCES accounts(id) ON DELETE SET NULL,
+    db_name TEXT NOT NULL DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE gateways (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    address TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    account_id INTEGER NULL REFERENCES accounts(id) ON DELETE SET NULL,
+    protocol TEXT NOT NULL DEFAULT 'ssh',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE asset_gateways (
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    gateway_id INTEGER NOT NULL REFERENCES gateways(id) ON DELETE CASCADE,
+    PRIMARY KEY (asset_id, gateway_id)
+);
+
+CREATE TABLE host_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    algorithm TEXT NOT NULL,
+    fingerprint TEXT NOT NULL UNIQUE,
+    private_key TEXT NOT NULL,
+    public_key TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE asset_permissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    actions TEXT NOT NULL DEFAULT 'connect',
+    date_start TIMESTAMP NULL,
+    date_expired TIMESTAMP NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE perm_users (
+    permission_id INTEGER NOT NULL REFERENCES asset_permissions(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (permission_id, user_id)
+);
+
+CREATE TABLE perm_user_groups (
+    permission_id INTEGER NOT NULL REFERENCES asset_permissions(id) ON DELETE CASCADE,
+    group_id INTEGER NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+    PRIMARY KEY (permission_id, group_id)
+);
+
+CREATE TABLE perm_assets (
+    permission_id INTEGER NOT NULL REFERENCES asset_permissions(id) ON DELETE CASCADE,
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    PRIMARY KEY (permission_id, asset_id)
+);
+
+CREATE TABLE perm_nodes (
+    permission_id INTEGER NOT NULL REFERENCES asset_permissions(id) ON DELETE CASCADE,
+    node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    PRIMARY KEY (permission_id, node_id)
+);
+
+CREATE TABLE perm_accounts (
+    permission_id INTEGER NOT NULL REFERENCES asset_permissions(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    PRIMARY KEY (permission_id, account_id)
+);
+
+CREATE TABLE connection_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    value TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    protocol TEXT NOT NULL,
+    connect_method TEXT NOT NULL,
+    is_reusable INTEGER NOT NULL DEFAULT 0,
+    connect_options TEXT NOT NULL DEFAULT '{}',
+    used_at TIMESTAMP NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    asset_id INTEGER NOT NULL REFERENCES assets(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    protocol TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'normal',
+    login_from TEXT NOT NULL DEFAULT 'WT',
+    remote_addr TEXT NOT NULL DEFAULT '',
+    recording_path TEXT NOT NULL DEFAULT '',
+    is_finished INTEGER NOT NULL DEFAULT 0,
+    date_start TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    date_end TIMESTAMP NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE session_recordings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    storage TEXT NOT NULL DEFAULT 'local',
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE command_filter_acls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT 'reject',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE login_acls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    rule TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT 'allow',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+    action TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    remote_addr TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE casbin_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ptype TEXT NOT NULL,
+    v0 TEXT NOT NULL DEFAULT '',
+    v1 TEXT NOT NULL DEFAULT '',
+    v2 TEXT NOT NULL DEFAULT '',
+    v3 TEXT NOT NULL DEFAULT '',
+    v4 TEXT NOT NULL DEFAULT '',
+    v5 TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX idx_casbin_rules_unique ON casbin_rules(ptype, v0, v1, v2, v3, v4, v5);
+
+CREATE TABLE settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'general',
+    label TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    input_type TEXT NOT NULL DEFAULT 'text',
+    options TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE refresh_tokens (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMP NOT NULL,
+    revoked_at TIMESTAMP NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- +goose Down
+DROP TABLE IF EXISTS refresh_tokens;
+DROP TABLE IF EXISTS settings;
+DROP TABLE IF EXISTS casbin_rules;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS login_acls;
+DROP TABLE IF EXISTS command_filter_acls;
+DROP TABLE IF EXISTS session_recordings;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS connection_tokens;
+DROP TABLE IF EXISTS perm_accounts;
+DROP TABLE IF EXISTS perm_nodes;
+DROP TABLE IF EXISTS perm_assets;
+DROP TABLE IF EXISTS perm_user_groups;
+DROP TABLE IF EXISTS perm_users;
+DROP TABLE IF EXISTS asset_permissions;
+DROP TABLE IF EXISTS host_keys;
+DROP TABLE IF EXISTS asset_gateways;
+DROP TABLE IF EXISTS gateways;
+DROP TABLE IF EXISTS accounts;
+DROP TABLE IF EXISTS asset_nodes;
+DROP TABLE IF EXISTS assets;
+DROP TABLE IF EXISTS nodes;
+DROP TABLE IF EXISTS platform_protocols;
+DROP TABLE IF EXISTS platforms;
+DROP TABLE IF EXISTS group_users;
+DROP TABLE IF EXISTS user_groups;
+DROP TABLE IF EXISTS user_roles;
+DROP TABLE IF EXISTS roles;
+DROP TABLE IF EXISTS users;
+
