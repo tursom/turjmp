@@ -98,16 +98,18 @@ func (l *limiter) release() {
 }
 
 // extractConnectionToken 从用户名或密码中提取连接 token。
-// 支持三种格式：
-//  1. token 放在密码字段中（密码即 token）
-//  2. token 放在用户名字段中（用户名即 token）
-//  3. 原生客户端格式：用户名#token（从 # 分隔符后提取 token）
+// 支持四种格式，按以下优先级检查：
+//  1. 用户名#token — 原生客户端格式，# 分隔符后提取 token（最高优先级）
+//  2. 密码#token — token 嵌入在密码字段中
+//  3. 密码原值 — 整个密码作为 token（兼容旧客户端）
+//  4. 用户名原值 — 仅当密码为空时回退
 //
-// 优先级：先检查密码字段，再检查用户名字段。
+// 设计要点：用户名#token 优先级最高，确保原生 SSH 客户端
+// （mysql、psql 等）通过登录用户名传递 token 时不会被普通密码覆盖。
 func extractConnectionToken(username, password string) string {
-	for _, candidate := range []string{password, username} {
-		candidate = strings.Trim(strings.TrimSpace(candidate), "\x00")
-		candidate = strings.TrimSpace(candidate)
+	username = normalizeTokenCandidate(username)
+	password = normalizeTokenCandidate(password)
+	for _, candidate := range []string{username, password} {
 		if candidate == "" {
 			continue
 		}
@@ -115,9 +117,22 @@ func extractConnectionToken(username, password string) string {
 		if idx := strings.LastIndex(candidate, "#"); idx >= 0 && idx < len(candidate)-1 {
 			return strings.TrimSpace(candidate[idx+1:])
 		}
-		return candidate
+	}
+	if password != "" {
+		return password
+	}
+	if username != "" {
+		return username
 	}
 	return ""
+}
+
+// normalizeTokenCandidate 清理 token 候选值中的空白字符和 null 字节。
+// SSH 客户端或连接字符串可能携带多余的空白符或 \x00 字节，
+// 提前清理可避免 API 验证时的匹配失败。
+func normalizeTokenCandidate(candidate string) string {
+	candidate = strings.Trim(strings.TrimSpace(candidate), "\x00")
+	return strings.TrimSpace(candidate)
 }
 
 // parseSettingString 从后端 API 返回的原始设置值中解析字符串。

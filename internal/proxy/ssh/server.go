@@ -28,11 +28,11 @@ import (
 // Server 是 SSH 代理服务器的主结构体。
 // 它封装了 gliderlabs SSH 服务器、API 客户端、网络监听器和生命周期控制。
 type Server struct {
-	cfg      config.Config   // 代理配置信息
-	api      *APIClient      // 与主 API 服务器通信的客户端
-	ssh      *gliderssh.Server // 底层 gliderlabs SSH 服务器实例
-	listener net.Listener    // TCP 网络监听器
-	stopMu   sync.Mutex      // 保护 stopFn 的互斥锁
+	cfg      config.Config      // 代理配置信息
+	api      *APIClient         // 与主 API 服务器通信的客户端
+	ssh      *gliderssh.Server  // 底层 gliderlabs SSH 服务器实例
+	listener net.Listener       // TCP 网络监听器
+	stopMu   sync.Mutex         // 保护 stopFn 的互斥锁
 	stopFn   context.CancelFunc // 取消函数，用于停止服务器
 }
 
@@ -170,12 +170,20 @@ func passwordHandler(api *APIClient) gliderssh.PasswordHandler {
 		if addr := ctx.RemoteAddr(); addr != nil {
 			remote = addr.String()
 		}
-		// 通过 API 验证连接令牌
-		auth, err := api.VerifyConnectionToken(ctx, password, remote)
+		// 1. 从 gliderlabs 上下文获取 SSH 用户名
+		username := ctx.User()
+		// 2. 默认使用密码作为令牌（向后兼容旧客户端）
+		token := password
+		// 3. 尝试提取 username#token 格式 —— 若提取成功则使用提取出的令牌
+		if extracted := extractConnectionToken(username, password); extracted != "" {
+			token = extracted
+		}
+		// 4. 通过 API 验证提取出的连接令牌
+		auth, err := api.VerifyConnectionToken(ctx, token, remote)
 		if err != nil {
 			return false
 		}
-		// 将认证结果存入会话上下文，供后续处理使用
+		// 5. 将认证结果存入 SSH 会话上下文，供下游处理器使用
 		ctx.SetValue("ssh_target", auth.Target)
 		ctx.SetValue("ssh_account", auth.Account)
 		ctx.SetValue("ssh_auth_user_id", auth.UserID)

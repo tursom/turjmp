@@ -294,6 +294,82 @@ func TestPhase1TokenDefaultsPermissionsAndReusableVerify(t *testing.T) {
 	}
 }
 
+// TestSDKURLBuildsNativeConnectionFiles 验证原生客户端连接文件生成：
+//  1. 准备：创建资产/账户，设置 db_name='appdb'
+//  2. 测试无 connect 权限时被拒绝
+//  3. 授予 connect 权限后测试 mysql/postgres/rdp 的 SDK URL 生成
+//  4. 验证 mysql 命令行包含 username#token 格式（无密钥泄露）
+//  5. 验证 postgres 命令行包含 -d appdb 参数
+//  6. 验证 RDP 回退到 Web 客户端（非 .rdp 文件）
+func TestSDKURLBuildsNativeConnectionFiles(t *testing.T) {
+	store, closeFn := newMigratedTestStore(t)
+	defer closeFn()
+	box := phase1SecretBox(t)
+	asset, account := createPhase1AssetAccount(t, store, box)
+	if _, err := store.DB().Exec(`UPDATE accounts SET db_name = 'appdb' WHERE id = ?`, account.ID); err != nil {
+		t.Fatal(err)
+	}
+	user, err := store.GetUserByUsername("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := NewTokenService(store, box, phase1ServiceConfig(t).ProxyAuth)
+	cfg := config.ProxyConfig{
+		APIBaseURL: "http://api.example.test:8080",
+		SSH:        config.SSHProxyConfig{Addr: ":2222"},
+		DB:         config.DBProxyConfig{MySQLAddr: ":3307", PostgresAddr: ":5437"},
+		RDP:        config.RDPProxyConfig{Addr: ":33891"},
+	}
+	if _, err := tokens.BuildSDKURL(user.ID, SDKURLInput{
+		IssueTokenInput: IssueTokenInput{AssetID: asset.ID, AccountID: account.ID, Protocol: "mysql"},
+	}, cfg); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("sdk without permission err=%v, want forbidden", err)
+	}
+	permission := domain.AssetPermission{Name: "connect sdk", Actions: "connect", IsActive: true}
+	if err := store.CreatePermission(&permission, repository.PermissionLinks{
+		UserIDs:    []int64{user.ID},
+		AssetIDs:   []int64{asset.ID},
+		AccountIDs: []int64{account.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mysql, err := tokens.BuildSDKURL(user.ID, SDKURLInput{
+		IssueTokenInput: IssueTokenInput{AssetID: asset.ID, AccountID: account.ID, Protocol: "mysql"},
+		ProxyHost:       "bastion.example.test",
+	}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mysql.Protocol != "mysql" || mysql.Port != 3307 || mysql.ConnectMethod != "mysql_client" {
+		t.Fatalf("unexpected mysql sdk: %#v", mysql)
+	}
+	if !strings.Contains(mysql.Command, "root#"+mysql.Token) || strings.Contains(mysql.Command, "target-password") {
+		t.Fatalf("mysql command should contain username#token and no secret: %q", mysql.Command)
+	}
+
+	postgres, err := tokens.BuildSDKURL(user.ID, SDKURLInput{
+		IssueTokenInput: IssueTokenInput{AssetID: asset.ID, AccountID: account.ID, Protocol: "postgresql"},
+	}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if postgres.Protocol != "postgres" || postgres.Host != "api.example.test" || !strings.Contains(postgres.Command, "-d appdb") {
+		t.Fatalf("unexpected postgres sdk: %#v", postgres)
+	}
+
+	rdp, err := tokens.BuildSDKURL(user.ID, SDKURLInput{
+		IssueTokenInput: IssueTokenInput{AssetID: asset.ID, AccountID: account.ID, Protocol: "rdp"},
+		ProxyHost:       "jump.example.test",
+	}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rdp.ConnectMethod != "web_rdp" || rdp.WebURL == "" || strings.Contains(rdp.Content, ".rdp") {
+		t.Fatalf("rdp should use web fallback sdk: %#v", rdp)
+	}
+}
+
 func phase1ServiceConfig(t *testing.T) config.Config {
 	t.Helper()
 	dir := t.TempDir()

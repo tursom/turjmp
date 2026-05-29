@@ -53,6 +53,8 @@ func ensureDefaultPolicies(e *casbin.Enforcer) error {
 		{"operator", "/api/v1/assets/:id/accounts/:aid", "GET|PUT"},
 		{"operator", "/api/v1/platforms", "GET"},
 		{"operator", "/api/v1/authentication/connection-tokens/", "POST"},
+		// 允许 operator 角色调用 SDK URL 接口，生成可下载/可复制的原生客户端连接文件
+		{"operator", "/api/v1/authentication/connection-tokens/sdk-url", "GET|POST"},
 		{"operator", "/api/v1/sessions", "GET|POST"},
 		{"operator", "/api/v1/sessions/:id", "GET|PATCH"},
 		{"auditor", "/api/v1/sessions", "GET"},

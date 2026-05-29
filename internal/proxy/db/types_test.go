@@ -17,9 +17,13 @@ func TestExtractConnectionToken(t *testing.T) {
 		password string
 		want     string
 	}{
-		{name: "password wins", username: "user-token", password: "pass-token", want: "pass-token"},
+		{name: "password wins without hash", username: "user-token", password: "pass-token", want: "pass-token"},
 		{name: "username fallback", username: "user-token", password: "", want: "user-token"},
 		{name: "username hash format", username: "realuser#token-123", password: "", want: "token-123"},
+		// 用户名#token 优先于真实密码：验证优先级反转 ——
+		// 用户名中的 #token 优先于真实数据库密码，确保原生客户端
+		// （mysql、psql 等）可将令牌放在登录用户名中传递。
+		{name: "username hash wins over real password", username: "realuser#token-123", password: "real-db-password", want: "token-123"},
 		{name: "password hash format", username: "realuser", password: "ignored#token-456", want: "token-456"},
 		{name: "trim spaces", username: "  token-with-space  ", password: "", want: "token-with-space"},
 		{name: "trim null bytes", username: "\x00token\x00", password: "", want: "token"},

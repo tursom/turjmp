@@ -4,13 +4,17 @@
 package handler
 
 import (
+	"net"
+	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/casbin/casbin/v2"
 	"github.com/gin-gonic/gin"
 
 	"github.com/tursom/turjmp/internal/api/httpx"
 	"github.com/tursom/turjmp/internal/api/middleware"
+	"github.com/tursom/turjmp/internal/config"
 	"github.com/tursom/turjmp/internal/domain"
 	"github.com/tursom/turjmp/internal/repository"
 	"github.com/tursom/turjmp/internal/service"
@@ -19,26 +23,28 @@ import (
 // Handler 聚合所有业务服务实例和基础设施依赖，作为 HTTP 路由处理器的接收者。
 // 每个公开方法对应一个 API 端点，通过 Gin 的 c *gin.Context 获取请求参数并返回响应。
 type Handler struct {
+	// Config 运行时配置：用于生成原生客户端连接信息中的代理端口和默认地址
+	Config config.Config
 	// Auth 认证服务：处理用户登录、登出、Token 刷新和 MFA 配置
-	Auth        *service.AuthService
+	Auth *service.AuthService
 	// Users 用户管理服务：处理用户的 CRUD 操作及角色关联
-	Users       *service.UserService
+	Users *service.UserService
 	// Assets 资产管理服务：处理资产、资产组和账户的 CRUD 操作及树形结构查询
-	Assets      *service.AssetService
+	Assets *service.AssetService
 	// Permissions 权限管理服务：处理权限规则的 CRUD 操作
 	Permissions *service.PermissionService
 	// Tokens 临时令牌服务：处理连接令牌的签发、验证和代理认证
-	Tokens      *service.TokenService
+	Tokens *service.TokenService
 	// Settings 配置管理服务：处理系统级配置项的读写操作
-	Settings    *service.SettingService
+	Settings *service.SettingService
 	// Sessions 会话管理服务：处理 SSH 会话记录的 CRUD 操作
-	Sessions    *service.SessionService
+	Sessions *service.SessionService
 	// HostKeys 管理 SSH 主机密钥的生成、存储和签名操作，供代理组件使用
-	HostKeys    *service.HostKeyService
+	HostKeys *service.HostKeyService
 	// Store 数据存储聚合：提供对数据库各表的直接读写操作
-	Store       *repository.Store
+	Store *repository.Store
 	// Enforcer Casbin 权限执行器：用于角色权限策略的管理和查询
-	Enforcer    *casbin.Enforcer
+	Enforcer *casbin.Enforcer
 }
 
 // Login 处理用户登录请求。
@@ -534,12 +540,50 @@ func (h *Handler) IssueConnectionToken(c *gin.Context) {
 	httpx.Created(c, gin.H{"token": token.Value, "expires_at": token.ExpiresAt, "expires_in": 300})
 }
 
+// SDKConnectionToken 为原生客户端生成连接 URL 和连接令牌，供 SDK 或命令行工具使用。
+// 端点：GET/POST /api/v1/authentication/connection-tokens/sdk-url（需 JWT 认证 + RBAC 鉴权）
+// GET 方法：参数通过 URL 查询字符串传递，适合浏览器直接打开下载链接
+// POST 方法：参数通过 JSON 请求体传递，支持更丰富的连接配置
+// 请求流程：
+//   1. bindSDKURLInput：根据请求方法绑定参数（GET 从查询字符串提取，POST 绑定 JSON 体）
+//   2. MustPrincipal：从 JWT 中获取当前认证用户信息
+//   3. proxy_host 为空时，默认使用请求的 Host/X-Forwarded-Host 头
+//   4. BuildSDKURL：调用 TokenService 构造带签名 Token 的连接 URL，返回连接信息和可下载的文件内容
+// 请求参数（GET 查询字符串）：
+//   asset_id（必填）：目标资产 ID，正整数
+//   account_id（必填）：SSH 账户 ID，正整数
+//   protocol（可选）：连接协议，如 ssh、rdp，默认 ssh
+//   connect_method（可选）：连接方式，如 direct、gateway
+//   proxy_host（可选）：代理服务器地址，为空时自动使用请求的 Host 头
+//   format（可选）：返回格式，如 json、rdp_file、ssh_config，默认 json
+// 响应体包含 token、expires_at、url 和可选的连接文件内容
+func (h *Handler) SDKConnectionToken(c *gin.Context) {
+	req, ok := bindSDKURLInput(c)
+	if !ok {
+		return
+	}
+	principal, err := httpx.MustPrincipal(c)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if req.ProxyHost == "" {
+		req.ProxyHost = requestProxyHost(c)
+	}
+	result, err := h.Tokens.BuildSDKURL(principal.UserID, req, h.Config.Proxy)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.Created(c, result)
+}
+
 // VerifyConnectionToken 供 SSH 代理组件调用，验证连接令牌的有效性
 // 该接口通过 X-Proxy-Auth 请求头进行代理认证
 // 请求体包含连接令牌和发起连接的真实客户端 IP（remote_addr）
 func (h *Handler) VerifyConnectionToken(c *gin.Context) {
 	var req struct {
-		Token      string `json:"token"`
+		Token string `json:"token"`
 		// RemoteAddr 发起 SSH 连接的真实客户端地址，用于审计和 IP 白名单校验
 		RemoteAddr string `json:"remote_addr"`
 	}
@@ -816,6 +860,73 @@ func pathID(c *gin.Context, name string) int64 {
 		return 0
 	}
 	return id
+}
+
+// bindSDKURLInput 根据 HTTP 请求方法绑定 SDK URL 输入参数，支持 GET 和 POST 两种方式。
+// POST 请求：通过 middleware.RequireJSON 从 JSON 请求体绑定完整的 SDKURLInput 结构
+// GET 请求：从 URL 查询字符串中提取各字段，asset_id 和 account_id 为必填参数，须为有效正整数
+func bindSDKURLInput(c *gin.Context) (service.SDKURLInput, bool) {
+	var req service.SDKURLInput
+	if c.Request.Method != http.MethodGet {
+		return req, middleware.RequireJSON(c, &req)
+	}
+	query := c.Request.URL.Query()
+	assetID, ok := queryInt64(c, query.Get("asset_id"))
+	if !ok {
+		return req, false
+	}
+	accountID, ok := queryInt64(c, query.Get("account_id"))
+	if !ok {
+		return req, false
+	}
+	req.AssetID = assetID
+	req.AccountID = accountID
+	req.Protocol = query.Get("protocol")
+	req.ConnectMethod = query.Get("connect_method")
+	req.ProxyHost = query.Get("proxy_host")
+	req.Format = query.Get("format")
+	return req, true
+}
+
+// queryInt64 从查询字符串参数中解析 int64 值，用于 GET 请求参数提取。
+// 解析规则：
+//   - 空字符串：返回 (0, false) 并写入错误响应
+//   - 非数字输入：返回 (0, false) 并写入错误响应
+//   - 值 ≤ 0：返回 (0, false) 并写入错误响应（asset_id 和 account_id 须为正整数）
+//   - 合法正整数：返回 (n, true)
+func queryInt64(c *gin.Context, raw string) (int64, bool) {
+	if strings.TrimSpace(raw) == "" {
+		httpx.Error(c, domain.ErrInvalidArgument)
+		return 0, false
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n <= 0 {
+		httpx.Error(c, domain.ErrInvalidArgument)
+		return 0, false
+	}
+	return n, true
+}
+
+// requestProxyHost 从 HTTP 请求中解析代理主机地址，按优先级依次尝试多种来源。
+// 解析链路：
+//   1. X-Forwarded-Host 请求头：优先使用反向代理传递的原始主机名
+//   2. Request.Host：HTTP Host 头，作为回退值
+//   3. 若值为逗号分隔的多主机列表（多级代理场景），取第一个值
+//   4. 通过 net.SplitHostPort 剥离端口号，仅保留主机名部分
+//   5. 移除 IPv6 地址两端的方括号（如 [::1] → ::1）
+// 返回值不含端口号的纯主机名或 IP 地址
+func requestProxyHost(c *gin.Context) string {
+	host := strings.TrimSpace(c.GetHeader("X-Forwarded-Host"))
+	if host == "" {
+		host = c.Request.Host
+	}
+	if strings.Contains(host, ",") {
+		host = strings.TrimSpace(strings.Split(host, ",")[0])
+	}
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil && parsedHost != "" {
+		return parsedHost
+	}
+	return strings.Trim(host, "[]")
 }
 
 // proxyAuthorized 校验代理请求的合法性

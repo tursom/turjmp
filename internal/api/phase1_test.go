@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -216,6 +217,37 @@ func TestPhase1RouterAssetsPermissionsTokensSettingsAndSessions(t *testing.T) {
 		t.Fatalf("unexpected verify result: %#v", verify)
 	}
 
+	// 测试 SDK URL 端点拒绝未认证请求
+	sdkUnauthorized := phase1Request(t, env.router, http.MethodPost, "/api/v1/authentication/connection-tokens/sdk-url", service.SDKURLInput{
+		IssueTokenInput: service.IssueTokenInput{AssetID: asset.ID, AccountID: account.ID, Protocol: "mysql"},
+	}, nil)
+	if sdkUnauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("sdk without auth status=%d body=%s", sdkUnauthorized.Code, sdkUnauthorized.Body.String())
+	}
+	// 测试 SDK URL POST 端点返回 mysql 协议的连接信息
+	sdkResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/authentication/connection-tokens/sdk-url", service.SDKURLInput{
+		IssueTokenInput: service.IssueTokenInput{AssetID: asset.ID, AccountID: account.ID, Protocol: "mysql"},
+		ProxyHost:       "bastion.test",
+	}, adminHeader)
+	if sdkResp.Code != http.StatusCreated {
+		t.Fatalf("sdk url status=%d body=%s", sdkResp.Code, sdkResp.Body.String())
+	}
+	sdk := phase1DecodeData[service.SDKURLResult](t, sdkResp)
+	if sdk.Protocol != "mysql" || sdk.Port != 3307 || sdk.Token == "" || !strings.Contains(sdk.Command, "root#"+sdk.Token) {
+		t.Fatalf("unexpected sdk result: %#v", sdk)
+	}
+	// 测试 SDK URL GET 端点通过查询参数请求 rdp 协议，返回 Web URL 回退
+	rdpSDKResp := phase1Request(t, env.router, http.MethodGet,
+		fmt.Sprintf("/api/v1/authentication/connection-tokens/sdk-url?asset_id=%d&account_id=%d&protocol=rdp&proxy_host=jump.test", asset.ID, account.ID),
+		nil, adminHeader)
+	if rdpSDKResp.Code != http.StatusCreated {
+		t.Fatalf("rdp sdk url status=%d body=%s", rdpSDKResp.Code, rdpSDKResp.Body.String())
+	}
+	rdpSDK := phase1DecodeData[service.SDKURLResult](t, rdpSDKResp)
+	if rdpSDK.WebURL == "" || rdpSDK.Filename != "turjmp-rdp.url" {
+		t.Fatalf("unexpected rdp sdk result: %#v", rdpSDK)
+	}
+
 	sessionResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/sessions", domain.Session{
 		UserID:     1,
 		AssetID:    asset.ID,
@@ -342,6 +374,7 @@ func newPhase1APITestEnv(t *testing.T) phase1APITestEnv {
 		t.Fatal(err)
 	}
 	h := &handler.Handler{
+		Config:      cfg,
 		Auth:        service.NewAuthService(store, jwtMgr, cfg),
 		Users:       service.NewUserService(store, cfg.Security.PasswordMinLength),
 		Assets:      service.NewAssetService(store, box),

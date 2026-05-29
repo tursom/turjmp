@@ -104,6 +104,11 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	secure.DELETE("/permissions/:id", h.DeletePermission)
 
 	secure.POST("/authentication/connection-tokens/", h.IssueConnectionToken)
+	// SDK URL 生成接口：为原生客户端生成带签名 Token 的连接 URL 和可下载的连接文件
+	// GET：参数通过查询字符串传递（asset_id、account_id 等），适合浏览器直接使用
+	// POST：参数通过 JSON 请求体传递，支持更丰富的连接配置
+	secure.GET("/authentication/connection-tokens/sdk-url", h.SDKConnectionToken)
+	secure.POST("/authentication/connection-tokens/sdk-url", h.SDKConnectionToken)
 	secure.GET("/sessions", h.ListSessions)
 	secure.POST("/sessions", h.CreateSession)
 	secure.GET("/sessions/:id", h.GetSession)

@@ -251,6 +251,8 @@ func startAPI(cfg config.Config, log *zap.Logger) (*server.Server, *repository.D
 	}
 
 	h := &handler.Handler{
+		// 注入运行时配置，供 Handler 生成原生客户端连接地址时使用
+		Config:      cfg,
 		Auth:        service.NewAuthService(store, jwtMgr, cfg),
 		Users:       service.NewUserService(store, cfg.Security.PasswordMinLength),
 		Assets:      service.NewAssetService(store, box),
