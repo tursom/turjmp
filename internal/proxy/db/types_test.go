@@ -157,6 +157,40 @@ func TestBuildMySQLDSN(t *testing.T) {
 	}
 }
 
+func TestBuildPostgresDSN(t *testing.T) {
+	got := buildPostgresDSN(authResult{
+		Target: targetConfig{Address: "pg.internal", Protocol: "postgresql"},
+		Account: targetAccount{
+			Username: "bob",
+			Secret:   "s ecret",
+			DBName:   "app/db",
+		},
+	}, 2500*time.Millisecond)
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Scheme != "postgres" || u.Host != "pg.internal:5432" || normalizeDSNForTest(u.Path) != "/app/db" {
+		t.Fatalf("unexpected postgres dsn: %s", got)
+	}
+	if user := u.User.Username(); user != "bob" {
+		t.Fatalf("user=%q", user)
+	}
+	if password, _ := u.User.Password(); password != "s ecret" {
+		t.Fatalf("password=%q", password)
+	}
+	query := u.Query()
+	for key, want := range map[string]string{
+		"sslmode":          "disable",
+		"connect_timeout":  "2",
+		"application_name": "turjmp",
+	} {
+		if got := query.Get(key); got != want {
+			t.Fatalf("query %s got %q want %q in %s", key, got, want, got)
+		}
+	}
+}
+
 func TestBuildUSQLDSN(t *testing.T) {
 	tests := []struct {
 		name     string
