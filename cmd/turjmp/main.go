@@ -22,6 +22,8 @@ import (
 	"github.com/tursom/turjmp/internal/logging"
 	// dbproxy 数据库代理服务实现，封装 MySQL 协议代理和 Web DB 终端功能
 	dbproxy "github.com/tursom/turjmp/internal/proxy/db"
+	// RDP Web 代理服务实现，基于 guacd 提供浏览器 RDP 访问与录制
+	rdpproxy "github.com/tursom/turjmp/internal/proxy/rdp"
 	// SSH 代理服务实现，处理入站 SSH 连接并代理到目标主机
 	sshproxy "github.com/tursom/turjmp/internal/proxy/ssh"
 	"github.com/tursom/turjmp/internal/rbac"
@@ -32,10 +34,11 @@ import (
 
 // roles 结构体表示通过命令行选择的运行角色
 // 角色之间相互独立，可任意组合启用：
-//   api      - HTTP API 服务器，提供 Web 管理界面和后端 REST 接口
-//   sshProxy - SSH 代理服务器，处理入站 SSH 连接并转发到目标主机
-//   dbProxy  - 数据库代理（暂未实现实际逻辑，仅输出占位日志）
-//   rdpProxy - RDP 代理（暂未实现实际逻辑，仅输出占位日志）
+//
+//	api      - HTTP API 服务器，提供 Web 管理界面和后端 REST 接口
+//	sshProxy - SSH 代理服务器，处理入站 SSH 连接并转发到目标主机
+//	dbProxy  - 数据库代理服务器，处理入站 MySQL/PostgreSQL 连接
+//	rdpProxy - RDP Web 代理服务器，通过 guacd 代理浏览器 RDP 会话
 type roles struct {
 	api      bool
 	sshProxy bool
@@ -44,14 +47,14 @@ type roles struct {
 }
 
 // main 函数是程序入口，完整启动流程如下：
-//   1. 解析命令行参数（flag.Parse）—— 获取配置路径、角色选择和迁移命令
-//   2. 加载配置文件（config.Load）—— 读取 YAML 配置，构建运行时配置结构
-//   3. 初始化日志系统（logging.New）—— 根据配置初始化 zap 日志器
-//   4. 若指定了 -migrate，执行数据库迁移命令后直接退出（不启动任何服务）
-//   5. 创建带信号监听的 context（server.SignalContext）—— 监听 SIGINT/SIGTERM
-//   6. 按选中的角色启动对应服务，API 和 SSH 代理在独立 goroutine 中运行
-//   7. 通过 errCh 通道监听 goroutine 运行时错误
-//   8. select 阻塞等待关闭信号（系统信号或运行时错误），收到后执行优雅关闭
+//  1. 解析命令行参数（flag.Parse）—— 获取配置路径、角色选择和迁移命令
+//  2. 加载配置文件（config.Load）—— 读取 YAML 配置，构建运行时配置结构
+//  3. 初始化日志系统（logging.New）—— 根据配置初始化 zap 日志器
+//  4. 若指定了 -migrate，执行数据库迁移命令后直接退出（不启动任何服务）
+//  5. 创建带信号监听的 context（server.SignalContext）—— 监听 SIGINT/SIGTERM
+//  6. 按选中的角色启动对应服务，API 和 SSH 代理在独立 goroutine 中运行
+//  7. 通过 errCh 通道监听 goroutine 运行时错误
+//  8. select 阻塞等待关闭信号（系统信号或运行时错误），收到后执行优雅关闭
 func main() {
 	var configPath string
 	var selected roles
@@ -62,7 +65,7 @@ func main() {
 	//   --api       bool    启用 API 服务器（HTTP REST + Web 管理界面）
 	//   --ssh-proxy bool    启用 SSH 代理服务器（监听并转发 SSH 连接）
 	//   --db-proxy  bool    启用数据库代理（当前仅占位）
-	//   --rdp-proxy bool    启用 RDP 代理（当前仅占位）
+	//   --rdp-proxy bool    启用 RDP Web 代理服务器
 	//   --all       bool    同时启用以上所有角色
 	//   --migrate   string  数据库迁移命令：up（应用迁移）/ down（回滚）/ status（查看状态）
 	flag.StringVar(&configPath, "config", "configs/config.dev.yaml", "config file path")
@@ -107,6 +110,8 @@ func main() {
 	var sshServer *sshproxy.Server
 	// dbServer 持有数据库代理服务器实例，管理 MySQL 原生协议代理的启动和停止生命周期
 	var dbServer *dbproxy.Server
+	// rdpServer 持有 RDP Web 代理服务器实例，管理 guacd WebSocket 桥接生命周期
+	var rdpServer *rdpproxy.Server
 
 	if selected.api {
 		apiServer, apiDB, err = startAPI(cfg, log)
@@ -142,9 +147,16 @@ func main() {
 			}
 		}()
 	}
-	// RDP 代理暂未实现，仅输出日志表示角色已选中（占位功能，后续版本补充）
+	// RDP 远程桌面代理角色启停：初始化 RDP Web 代理服务器，在 goroutine 中监听 WebSocket 和 guacd 双端口，
+	// 将浏览器 RDP 流量（含音频/视频/粘贴板）代理到远程 Windows 主机，异常时写入错误通道
 	if selected.rdpProxy {
-		log.Info("rdp_proxy_stub_started")
+		rdpServer = rdpproxy.NewServer(cfg)
+		go func() {
+			log.Info("rdp_proxy_start", zap.String("addr", cfg.Proxy.RDP.ListenAddr()), zap.String("guacd_addr", cfg.Proxy.RDP.GuacdListenAddr()))
+			if err := rdpServer.Start(ctx); err != nil {
+				errCh <- fmt.Errorf("rdp proxy: %w", err)
+			}
+		}()
 	}
 
 	// 优雅关闭触发条件（二选一，select 阻塞直到任一事件发生）：
@@ -175,6 +187,10 @@ func main() {
 	if dbServer != nil {
 		dbServer.Stop()
 	}
+	// 优雅关闭 RDP Web 代理服务器，释放 WebSocket 监听端口和 guacd 会话资源
+	if rdpServer != nil {
+		rdpServer.Stop()
+	}
 	log.Info("shutdown_complete")
 }
 
@@ -187,15 +203,16 @@ func (r roles) any() bool {
 
 // startAPI 初始化 API 服务器及其完整依赖链
 // 初始化顺序严格遵守依赖关系，不可调换：
-//   1. 数据库连接（repository.NewDB）     —— 一切持久化操作的基础
-//   2. 数据仓库（repository.NewStore）    —— 封装所有数据库查询，依赖 db
-//   3. 加密模块（crypto.NewSecretBox）    —— 机密数据加解密，依赖配置中的加密密钥
-//   4. JWT 管理器（auth.NewJWTManager）   —— 身份认证令牌生成与验证
-//   5. 密钥目录（ensureKeyDirs）          —— 确保 JWT 私钥/公钥文件路径可写
-//   6. RBAC 执行器（rbac.NewEnforcer）    —— 基于角色的访问控制，依赖 store
-//   7. 设置服务（settingService.Load）    —— 加载全局系统设置，依赖 store 和 box
-//   8. HTTP 处理器（handler.Handler）     —— 注册所有业务服务到处理器
-//   9. HTTP 服务器（server.New）          —— 组装中间件、路由并返回可启动的服务器
+//  1. 数据库连接（repository.NewDB）     —— 一切持久化操作的基础
+//  2. 数据仓库（repository.NewStore）    —— 封装所有数据库查询，依赖 db
+//  3. 加密模块（crypto.NewSecretBox）    —— 机密数据加解密，依赖配置中的加密密钥
+//  4. JWT 管理器（auth.NewJWTManager）   —— 身份认证令牌生成与验证
+//  5. 密钥目录（ensureKeyDirs）          —— 确保 JWT 私钥/公钥文件路径可写
+//  6. RBAC 执行器（rbac.NewEnforcer）    —— 基于角色的访问控制，依赖 store
+//  7. 设置服务（settingService.Load）    —— 加载全局系统设置，依赖 store 和 box
+//  8. HTTP 处理器（handler.Handler）     —— 注册所有业务服务到处理器
+//  9. HTTP 服务器（server.New）          —— 组装中间件、路由并返回可启动的服务器
+//
 // 任一步骤初始化失败都会关闭已打开的数据库连接并向上返回错误
 func startAPI(cfg config.Config, log *zap.Logger) (*server.Server, *repository.DB, error) {
 	db, err := repository.NewDB(cfg.Database)
@@ -242,9 +259,9 @@ func startAPI(cfg config.Config, log *zap.Logger) (*server.Server, *repository.D
 		Settings:    settingService,
 		Sessions:    service.NewSessionService(store),
 		// 主机密钥管理服务，提供 SSH HostKey 的生成、存储和查询
-		HostKeys:    service.NewHostKeyService(store),
-		Store:       store,
-		Enforcer:    enforcer,
+		HostKeys: service.NewHostKeyService(store),
+		Store:    store,
+		Enforcer: enforcer,
 	}
 	return server.New(cfg, log, db, h), db, nil
 }
@@ -252,9 +269,11 @@ func startAPI(cfg config.Config, log *zap.Logger) (*server.Server, *repository.D
 // runMigration 执行数据库迁移操作
 // 创建独立的数据库连接，使用 goose 库管理迁移版本
 // command 参数支持三种操作：
-//   "up"     - 应用所有未执行的迁移（正向迁移）
-//   "down"   - 回滚最近一次已执行的迁移
-//   "status" - 查看迁移状态（列出已执行和未执行的迁移）
+//
+//	"up"     - 应用所有未执行的迁移（正向迁移）
+//	"down"   - 回滚最近一次已执行的迁移
+//	"status" - 查看迁移状态（列出已执行和未执行的迁移）
+//
 // 迁移文件存放于 cfg.Database.MigrationsDir 指定的目录中
 func runMigration(cfg config.Config, command string) error {
 	db, err := repository.NewDB(cfg.Database)

@@ -1,0 +1,33 @@
+services:
+  turjmp:
+    image: turjmp:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: --config /etc/turjmp/config.yaml --all
+    volumes:
+      - ../configs/config.prod.yaml:/etc/turjmp/config.yaml:ro
+      - turjmp_keys:/keys
+      - turjmp_recordings:/recordings
+      - guacd_recordings:/recordings/rdp-tmp
+    ports:
+      - "${TURJMP_HTTP_PORT:-8080}:8080"
+      - "${TURJMP_SSH_PORT:-2222}:2222"
+      - "${TURJMP_MYSQL_PROXY_PORT:-3307}:3307"
+      - "${TURJMP_POSTGRES_PROXY_PORT:-5437}:5437"
+      - "${TURJMP_RDP_PROXY_PORT:-33891}:33891"
+    depends_on:
+      guacd:
+        condition: service_started
+
+  guacd:
+    image: guacamole/guacd:1.5.5
+    volumes:
+      - guacd_recordings:/recordings/rdp-tmp
+    expose:
+      - "4822"
+
+volumes:
+  turjmp_keys:
+  turjmp_recordings:
+  guacd_recordings:

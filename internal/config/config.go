@@ -34,7 +34,7 @@ type Config struct {
 // AppConfig 应用基础配置。
 type AppConfig struct {
 	Name        string `koanf:"name"`        // 应用名称，默认 "Turjmp"
-	Environment string `koanf:"environment"`  // 运行环境：dev（开发）、test（测试）、prod（生产）
+	Environment string `koanf:"environment"` // 运行环境：dev（开发）、test（测试）、prod（生产）
 }
 
 // HTTPConfig HTTP 服务器配置。
@@ -61,7 +61,7 @@ type DatabaseConfig struct {
 
 // SecurityConfig 安全相关配置。
 type SecurityConfig struct {
-	EncryptionKey     string `koanf:"encryption_key"`     // 密钥加密主密钥，用于 SecretBox 加解密账户凭据
+	EncryptionKey     string `koanf:"encryption_key"`      // 密钥加密主密钥，用于 SecretBox 加解密账户凭据
 	PasswordMinLength int    `koanf:"password_min_length"` // 用户密码最小长度，默认 8
 }
 
@@ -70,7 +70,7 @@ type JWTConfig struct {
 	PrivateKeyPath    string `koanf:"private_key_path"`    // Ed25519 私钥文件路径，用于签发 Access Token
 	PublicKeyPath     string `koanf:"public_key_path"`     // Ed25519 公钥文件路径，用于验证 Token 签名
 	AccessTTLSeconds  int    `koanf:"access_ttl_seconds"`  // Access Token 有效期秒数
-	RefreshTTLSeconds int    `koanf:"refresh_ttl_seconds"`  // Refresh Token 有效期秒数
+	RefreshTTLSeconds int    `koanf:"refresh_ttl_seconds"` // Refresh Token 有效期秒数
 }
 
 // AccessTTL 返回 Access Token 有效期时长。
@@ -103,6 +103,7 @@ type ProxyConfig struct {
 	APIBaseURL string         `koanf:"api_base_url"`
 	SSH        SSHProxyConfig `koanf:"ssh"`
 	DB         DBProxyConfig  `koanf:"db"`
+	RDP        RDPProxyConfig `koanf:"rdp"`
 }
 
 // SSHProxyConfig SSH 代理服务器配置，控制监听地址、连接数限制和超时参数
@@ -205,6 +206,64 @@ func (c DBProxyConfig) UsqlCommand() string {
 	return c.UsqlPath
 }
 
+// RDPProxyConfig RDP Web 代理配置，控制 HTTP/WebSocket 监听、guacd 地址和录制暂存目录。
+type RDPProxyConfig struct {
+	Addr                  string `koanf:"addr"`                    // HTTP 监听地址，如 ":33891"
+	GuacdAddr             string `koanf:"guacd_addr"`              // guacd sidecar TCP 地址，如 "127.0.0.1:4822"
+	RecordingPath         string `koanf:"recording_path"`          // guacd 录制暂存目录
+	MaxConnections        int    `koanf:"max_connections"`         // 最大并发 RDP 会话数
+	IdleTimeoutSeconds    int    `koanf:"idle_timeout_seconds"`    // WebSocket/guacd 空闲超时秒数
+	ConnectTimeoutSeconds int    `koanf:"connect_timeout_seconds"`  // 连接 guacd 的超时秒数
+}
+
+// ListenAddr 返回 RDP WebSocket 代理监听地址。
+func (c RDPProxyConfig) ListenAddr() string {
+	if c.Addr == "" {
+		return ":33891"
+	}
+	return c.Addr
+}
+
+// GuacdListenAddr 返回 guacd TCP 地址。
+func (c RDPProxyConfig) GuacdListenAddr() string {
+	if c.GuacdAddr == "" {
+		return "127.0.0.1:4822"
+	}
+	return c.GuacdAddr
+}
+
+// RecordingDir 返回 guacd 录制暂存目录。
+func (c RDPProxyConfig) RecordingDir() string {
+	if c.RecordingPath == "" {
+		return "./recordings/rdp-tmp"
+	}
+	return c.RecordingPath
+}
+
+// IdleTimeout 返回 RDP 代理空闲超时时间，未配置时默认 60 分钟。
+func (c RDPProxyConfig) IdleTimeout() time.Duration {
+	if c.IdleTimeoutSeconds <= 0 {
+		return time.Hour
+	}
+	return time.Duration(c.IdleTimeoutSeconds) * time.Second
+}
+
+// ConnectTimeout 返回连接 guacd 的超时时间，未配置时默认 15 秒。
+func (c RDPProxyConfig) ConnectTimeout() time.Duration {
+	if c.ConnectTimeoutSeconds <= 0 {
+		return 15 * time.Second
+	}
+	return time.Duration(c.ConnectTimeoutSeconds) * time.Second
+}
+
+// ConnectionLimit 返回最大 RDP 会话数，未配置时默认 20。
+func (c RDPProxyConfig) ConnectionLimit() int {
+	if c.MaxConnections <= 0 {
+		return 20
+	}
+	return c.MaxConnections
+}
+
 // TOTPConfig TOTP 多因子认证配置。
 type TOTPConfig struct {
 	Issuer string `koanf:"issuer"` // TOTP 发行者标识，显示在认证器应用中，默认 "Turjmp"
@@ -219,15 +278,16 @@ type LoggingConfig struct {
 // RateLimitConfig API 限流配置。
 type RateLimitConfig struct {
 	Enabled           bool    `koanf:"enabled"`             // 是否启用限流
-	RequestsPerSecond float64 `koanf:"requests_per_second"`  // 每秒允许的最大请求数，默认 20
+	RequestsPerSecond float64 `koanf:"requests_per_second"` // 每秒允许的最大请求数，默认 20
 }
 
 // Load 加载并返回完整的应用配置。
 // 配置加载层级（后加载的覆盖前者）：
-//   1. defaults() — 硬编码默认值
-//   2. YAML 配置文件 — 通过 path 参数指定的文件路径
-//   3. 环境变量 — 以 TURJMP_ 为前缀，双下划线或下划线转为点号分隔
-//      例如 TURJMP_HTTP_ADDR → http.addr，TURJMP_DATABASE_DSN → database.dsn
+//  1. defaults() — 硬编码默认值
+//  2. YAML 配置文件 — 通过 path 参数指定的文件路径
+//  3. 环境变量 — 以 TURJMP_ 为前缀，双下划线或下划线转为点号分隔
+//     例如 TURJMP_HTTP_ADDR → http.addr，TURJMP_DATABASE_DSN → database.dsn
+//
 // 加载完成后执行必要的校验（数据库驱动、JWT 密钥路径、代理密钥必填）。
 func Load(path string) (Config, error) {
 	k := koanf.New(".")
@@ -307,6 +367,13 @@ func defaults() map[string]any {
 		"proxy.db.idle_timeout_seconds":    1800,
 		"proxy.db.connect_timeout_seconds": 15,
 		"proxy.db.usql_path":               "usql",
+		// RDP Web 代理监听、guacd 连接和录制暂存配置
+		"proxy.rdp.addr":                    ":33891",
+		"proxy.rdp.guacd_addr":              "127.0.0.1:4822",
+		"proxy.rdp.recording_path":          "./recordings/rdp-tmp",
+		"proxy.rdp.max_connections":         20,
+		"proxy.rdp.idle_timeout_seconds":    3600,
+		"proxy.rdp.connect_timeout_seconds": 15,
 		"totp.issuer":                       "Turjmp",
 		"logging.level":                     "info",
 		"logging.encoding":                  "json",

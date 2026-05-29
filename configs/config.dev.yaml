@@ -47,6 +47,19 @@ proxy:
     connect_timeout_seconds: 15
     # Web DB 终端使用的 usql 可执行文件
     usql_path: "usql"
+  rdp:
+    # RDP WebSocket 代理监听地址，前端连接 /ws/rdp/?token=...
+    addr: ":33891"
+    # guacd sidecar TCP 地址
+    guacd_addr: "127.0.0.1:4822"
+    # guacd 屏幕录制暂存目录
+    recording_path: "./recordings/rdp-tmp"
+    # 最大并发 RDP 会话数
+    max_connections: 20
+    # 空闲超时秒数（60 分钟）
+    idle_timeout_seconds: 3600
+    # 连接 guacd 超时秒数（15 秒）
+    connect_timeout_seconds: 15
 totp:
   issuer: "Turjmp"
 logging:
