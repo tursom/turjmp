@@ -237,6 +237,11 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any, dst a
 		return err
 	}
 	defer resp.Body.Close()
+	// HTTP 204 No Content 表示请求成功但无响应体（如 PATCH 更新、审计日志写入等接口），
+	// 此时无需解析 JSON 应答，直接返回 nil
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
 	// 解析统一响应格式
 	var envelope struct {
 		Data  json.RawMessage `json:"data"`
