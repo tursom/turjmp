@@ -20,6 +20,8 @@ import (
 	"github.com/tursom/turjmp/internal/config"
 	"github.com/tursom/turjmp/internal/crypto"
 	"github.com/tursom/turjmp/internal/logging"
+	// dbproxy 数据库代理服务实现，封装 MySQL 协议代理和 Web DB 终端功能
+	dbproxy "github.com/tursom/turjmp/internal/proxy/db"
 	// SSH 代理服务实现，处理入站 SSH 连接并代理到目标主机
 	sshproxy "github.com/tursom/turjmp/internal/proxy/ssh"
 	"github.com/tursom/turjmp/internal/rbac"
@@ -103,6 +105,8 @@ func main() {
 	var apiDB *repository.DB
 	// SSH 代理服务器实例，监听并代理 SSH 连接
 	var sshServer *sshproxy.Server
+	// dbServer 持有数据库代理服务器实例，管理 MySQL 原生协议代理的启动和停止生命周期
+	var dbServer *dbproxy.Server
 
 	if selected.api {
 		apiServer, apiDB, err = startAPI(cfg, log)
@@ -127,7 +131,21 @@ func main() {
 			}
 		}()
 	}
-	startProxyStubs(selected, log)
+	// 数据库代理角色启停：初始化 MySQL 原生协议代理服务器，在 goroutine 中监听配置地址，
+	// 拦截 MySQL 客户端连接握手并将 SQL 流量代理到目标数据库，异常时写入错误通道
+	if selected.dbProxy {
+		dbServer = dbproxy.NewServer(cfg)
+		go func() {
+			log.Info("db_proxy_start", zap.String("addr", cfg.Proxy.DB.MySQLListenAddr()))
+			if err := dbServer.Start(ctx); err != nil {
+				errCh <- fmt.Errorf("db proxy: %w", err)
+			}
+		}()
+	}
+	// RDP 代理暂未实现，仅输出日志表示角色已选中（占位功能，后续版本补充）
+	if selected.rdpProxy {
+		log.Info("rdp_proxy_stub_started")
+	}
 
 	// 优雅关闭触发条件（二选一，select 阻塞直到任一事件发生）：
 	//   case <-ctx.Done():  收到 SIGINT（Ctrl+C）或 SIGTERM 系统信号
@@ -152,6 +170,10 @@ func main() {
 	// 优雅关闭 SSH 代理服务器，释放端口和连接资源
 	if sshServer != nil {
 		sshServer.Stop()
+	}
+	// 优雅关闭数据库代理服务器，释放 MySQL 监听端口和所有活跃的连接资源
+	if dbServer != nil {
+		dbServer.Stop()
 	}
 	log.Info("shutdown_complete")
 }
@@ -225,16 +247,6 @@ func startAPI(cfg config.Config, log *zap.Logger) (*server.Server, *repository.D
 		Enforcer:    enforcer,
 	}
 	return server.New(cfg, log, db, h), db, nil
-}
-
-// startProxyStubs 为非 SSH 的代理角色（DB、RDP）输出占位日志，表示这些角色尚未实现实际逻辑
-func startProxyStubs(selected roles, log *zap.Logger) {
-	if selected.dbProxy {
-		log.Info("db_proxy_stub_started")
-	}
-	if selected.rdpProxy {
-		log.Info("rdp_proxy_stub_started")
-	}
 }
 
 // runMigration 执行数据库迁移操作

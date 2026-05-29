@@ -102,6 +102,7 @@ type ProxyConfig struct {
 	// API 服务的基础 URL，供 SSH 代理等组件回调认证和 Token 验证接口
 	APIBaseURL string         `koanf:"api_base_url"`
 	SSH        SSHProxyConfig `koanf:"ssh"`
+	DB         DBProxyConfig  `koanf:"db"`
 }
 
 // SSHProxyConfig SSH 代理服务器配置，控制监听地址、连接数限制和超时参数
@@ -138,6 +139,70 @@ func (c SSHProxyConfig) ConnectionLimit() int {
 		return 100
 	}
 	return c.MaxConnections
+}
+
+// DBProxyConfig 数据库代理服务器配置，控制 MySQL/PG 监听地址、连接数限制和 Web DB 终端命令。
+type DBProxyConfig struct {
+	// MySQL 原生代理监听地址，如 ":3307"
+	MySQLAddr string `koanf:"mysql_addr"`
+	// PostgreSQL 原生代理监听地址。本阶段仅保留配置，不启动 PG 原生状态机。
+	PostgresAddr string `koanf:"postgres_addr"`
+	// 最大并发数据库代理连接数
+	MaxConnections int `koanf:"max_connections"`
+	// 空闲超时秒数
+	IdleTimeoutSeconds int `koanf:"idle_timeout_seconds"`
+	// 连接真实数据库的超时秒数
+	ConnectTimeoutSeconds int `koanf:"connect_timeout_seconds"`
+	// usql 可执行文件路径，用于 WebSocket DB 终端
+	UsqlPath string `koanf:"usql_path"`
+}
+
+// IdleTimeout 返回数据库代理空闲超时时间，未配置时默认 30 分钟。
+func (c DBProxyConfig) IdleTimeout() time.Duration {
+	if c.IdleTimeoutSeconds <= 0 {
+		return 30 * time.Minute
+	}
+	return time.Duration(c.IdleTimeoutSeconds) * time.Second
+}
+
+// ConnectTimeout 返回连接真实数据库的超时时间，未配置时默认 15 秒。
+func (c DBProxyConfig) ConnectTimeout() time.Duration {
+	if c.ConnectTimeoutSeconds <= 0 {
+		return 15 * time.Second
+	}
+	return time.Duration(c.ConnectTimeoutSeconds) * time.Second
+}
+
+// ConnectionLimit 返回最大数据库代理连接数，未配置时默认 50。
+func (c DBProxyConfig) ConnectionLimit() int {
+	if c.MaxConnections <= 0 {
+		return 50
+	}
+	return c.MaxConnections
+}
+
+// MySQLListenAddr 返回 MySQL 代理监听地址。
+func (c DBProxyConfig) MySQLListenAddr() string {
+	if c.MySQLAddr == "" {
+		return ":3307"
+	}
+	return c.MySQLAddr
+}
+
+// PostgresListenAddr 返回 PostgreSQL 代理监听地址。
+func (c DBProxyConfig) PostgresListenAddr() string {
+	if c.PostgresAddr == "" {
+		return ":5437"
+	}
+	return c.PostgresAddr
+}
+
+// UsqlCommand 返回 usql 可执行文件路径。
+func (c DBProxyConfig) UsqlCommand() string {
+	if c.UsqlPath == "" {
+		return "usql"
+	}
+	return c.UsqlPath
 }
 
 // TOTPConfig TOTP 多因子认证配置。
@@ -235,6 +300,13 @@ func defaults() map[string]any {
 		"proxy.ssh.idle_timeout_seconds": 900,
 		// 连接目标主机超时秒数，15 秒未建立连接则失败
 		"proxy.ssh.connect_timeout_seconds": 15,
+		// 数据库代理监听地址与连接参数
+		"proxy.db.mysql_addr":              ":3307",
+		"proxy.db.postgres_addr":           ":5437",
+		"proxy.db.max_connections":         50,
+		"proxy.db.idle_timeout_seconds":    1800,
+		"proxy.db.connect_timeout_seconds": 15,
+		"proxy.db.usql_path":               "usql",
 		"totp.issuer":                       "Turjmp",
 		"logging.level":                     "info",
 		"logging.encoding":                  "json",

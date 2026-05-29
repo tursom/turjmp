@@ -33,6 +33,19 @@ proxy:
     idle_timeout_seconds: 900
     # 连接目标主机超时秒数（15 秒）
     connect_timeout_seconds: 15
+  db:
+    # MySQL 原生代理监听地址
+    mysql_addr: ":3307"
+    # PostgreSQL 原生代理本阶段暂不启动，仅保留配置
+    postgres_addr: ":5437"
+    # 最大并发数据库代理连接数
+    max_connections: 50
+    # 空闲超时秒数（30 分钟）
+    idle_timeout_seconds: 1800
+    # 连接真实数据库超时秒数（15 秒）
+    connect_timeout_seconds: 15
+    # Web DB 终端使用的 usql 可执行文件
+    usql_path: "usql"
 totp:
   issuer: "Turjmp"
 logging:

@@ -12,6 +12,8 @@ import (
 	"github.com/tursom/turjmp/internal/api/handler"
 	"github.com/tursom/turjmp/internal/api/middleware"
 	"github.com/tursom/turjmp/internal/config"
+	// dbproxy 数据库代理服务实现，封装 MySQL 协议代理和 Web DB 终端功能
+	dbproxy "github.com/tursom/turjmp/internal/proxy/db"
 	sshproxy "github.com/tursom/turjmp/internal/proxy/ssh"
 	"github.com/tursom/turjmp/internal/repository"
 )
@@ -34,6 +36,8 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	// WebSocket 终端路由：浏览器通过 WebSocket 协议直连 SSH 代理，实现 Web 终端功能
 	r.GET("/ws/terminal", gin.WrapH(sshproxy.NewWebTerminal(cfg)))
+	// WebSocket 数据库终端：通过 usql 子进程连接 MySQL/PostgreSQL 目标资产。
+	r.GET("/ws/db-terminal", gin.WrapH(dbproxy.NewWebTerminal(cfg)))
 	// /health/ready：就绪检查端点，验证数据库连接可用性（无需认证）
 	r.GET("/health/ready", func(c *gin.Context) {
 		if err := db.Ping(); err != nil {
