@@ -223,7 +223,7 @@ func TestBuildUSQLDSN(t *testing.T) {
 		{
 			name:    "unsupported",
 			auth:    authResult{Target: targetConfig{Protocol: "oracle"}},
-			wantErr: "unsupported db terminal protocol",
+			wantErr: "不支持的数据库终端协议",
 		},
 	}
 	for _, tt := range tests {

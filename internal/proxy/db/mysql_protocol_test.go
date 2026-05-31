@@ -98,9 +98,9 @@ func TestParseHandshakeResponseErrors(t *testing.T) {
 		payload []byte
 		want    string
 	}{
-		{name: "short", payload: []byte{1, 2, 3}, want: "short mysql handshake response"},
-		{name: "missing username terminator", payload: append(make([]byte, 32), []byte("alice")...), want: "missing mysql username"},
-		{name: "invalid auth response", payload: truncatedSecureAuth, want: "invalid mysql auth response"},
+		{name: "short", payload: []byte{1, 2, 3}, want: "MySQL 握手响应过短"},
+		{name: "missing username terminator", payload: append(make([]byte, 32), []byte("alice")...), want: "缺少 MySQL 用户名"},
+		{name: "invalid auth response", payload: truncatedSecureAuth, want: "MySQL 认证响应无效"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

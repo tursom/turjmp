@@ -20,7 +20,7 @@ func TestParseSFTPPolicyAndPathChecks(t *testing.T) {
 	}
 	for _, path := range []string{"/etc/shadow", "/secret/file", "secret/nested"} {
 		t.Run(path, func(t *testing.T) {
-			if err := h.checkPath(path); err == nil || !strings.Contains(err.Error(), "path denied") {
+			if err := h.checkPath(path); err == nil || !strings.Contains(err.Error(), "路径被策略拒绝") {
 				t.Fatalf("err=%v", err)
 			}
 		})
