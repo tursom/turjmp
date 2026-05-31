@@ -47,11 +47,11 @@ func HashPassword(password string) (string, error) {
 func VerifyPassword(password, encoded string) (bool, error) {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" {
-		return false, fmt.Errorf("invalid password hash format")
+		return false, fmt.Errorf("无效的密码哈希格式")
 	}
 	params := strings.Split(parts[3], ",")
 	if len(params) != 3 {
-		return false, fmt.Errorf("invalid argon2 parameters")
+		return false, fmt.Errorf("无效的 argon2 参数")
 	}
 	memory, err := parseParam(params[0], "m")
 	if err != nil {
@@ -81,7 +81,7 @@ func VerifyPassword(password, encoded string) (bool, error) {
 func parseParam(part, key string) (int, error) {
 	prefix := key + "="
 	if !strings.HasPrefix(part, prefix) {
-		return 0, fmt.Errorf("missing argon2 parameter %s", key)
+		return 0, fmt.Errorf("缺少 argon2 参数：%s", key)
 	}
 	return strconv.Atoi(strings.TrimPrefix(part, prefix))
 }

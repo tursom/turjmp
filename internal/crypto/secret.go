@@ -83,7 +83,7 @@ func (b *SecretBox) DecryptString(value string) (string, error) {
 		return "", err
 	}
 	if len(raw) < b.gcm.NonceSize() {
-		return "", fmt.Errorf("encrypted value too short")
+		return "", fmt.Errorf("加密值过短")
 	}
 	nonce := raw[:b.gcm.NonceSize()]
 	ciphertext := raw[b.gcm.NonceSize():]

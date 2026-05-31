@@ -82,7 +82,7 @@ func (m *JWTManager) SignAccessToken(userID int64, username string, roles []stri
 func (m *JWTManager) ParseAccessToken(raw string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(raw, &Claims{}, func(token *jwt.Token) (any, error) {
 		if token.Method != jwt.SigningMethodRS256 {
-			return nil, fmt.Errorf("unexpected signing method %s", token.Header["alg"])
+			return nil, fmt.Errorf("意外的签名方法 %s", token.Header["alg"])
 		}
 		return m.publicKey, nil
 	})
@@ -91,7 +91,7 @@ func (m *JWTManager) ParseAccessToken(raw string) (*Claims, error) {
 	}
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
-		return nil, errors.New("invalid token")
+		return nil, errors.New("无效的令牌")
 	}
 	return claims, nil
 }
@@ -143,7 +143,7 @@ func loadKeyPair(privatePath, publicPath string) (*rsa.PrivateKey, *rsa.PublicKe
 	}
 	privBlock, _ := pem.Decode(privBytes)
 	if privBlock == nil {
-		return nil, nil, errors.New("invalid private key pem")
+		return nil, nil, errors.New("无效的私钥 PEM")
 	}
 	priv, err := x509.ParsePKCS1PrivateKey(privBlock.Bytes)
 	if err != nil {
@@ -155,7 +155,7 @@ func loadKeyPair(privatePath, publicPath string) (*rsa.PrivateKey, *rsa.PublicKe
 	}
 	pubBlock, _ := pem.Decode(pubBytes)
 	if pubBlock == nil {
-		return nil, nil, errors.New("invalid public key pem")
+		return nil, nil, errors.New("无效的公钥 PEM")
 	}
 	pubAny, err := x509.ParsePKIXPublicKey(pubBlock.Bytes)
 	if err != nil {
@@ -163,7 +163,7 @@ func loadKeyPair(privatePath, publicPath string) (*rsa.PrivateKey, *rsa.PublicKe
 	}
 	pub, ok := pubAny.(*rsa.PublicKey)
 	if !ok {
-		return nil, nil, errors.New("public key is not RSA")
+		return nil, nil, errors.New("公钥不是 RSA")
 	}
 	return priv, pub, nil
 }
