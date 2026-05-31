@@ -101,7 +101,7 @@ func (a *Adapter) RemoveFilteredPolicy(sec string, ptype string, fieldIndex int,
 		}
 		field := fieldIndex + i
 		if field < 0 || field > 5 {
-			return fmt.Errorf("invalid casbin field index %d", field)
+			return fmt.Errorf("无效的 casbin 字段索引：%d", field)
 		}
 		clauses = append(clauses, fmt.Sprintf("v%d = ?", field))
 		args = append(args, value)

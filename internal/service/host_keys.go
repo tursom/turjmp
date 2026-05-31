@@ -74,7 +74,7 @@ func (s *HostKeyService) Signers() ([]gossh.Signer, error) {
 	for _, key := range keys {
 		signer, err := gossh.ParsePrivateKey([]byte(key.PrivateKey))
 		if err != nil {
-			return nil, fmt.Errorf("parse %s host key: %w", key.Algorithm, err)
+			return nil, fmt.Errorf("解析 %s 主机密钥失败：%w", key.Algorithm, err)
 		}
 		signers = append(signers, signer)
 	}

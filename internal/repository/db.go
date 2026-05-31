@@ -40,7 +40,7 @@ func NewDB(cfg config.DatabaseConfig) (*DB, error) {
 	db.SetConnMaxLifetime(30 * time.Minute)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("connect database: %w", err)
+		return nil, fmt.Errorf("连接数据库失败：%w", err)
 	}
 	return &DB{DB: db, Driver: cfg.Driver}, nil
 }

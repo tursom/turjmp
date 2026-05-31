@@ -139,7 +139,7 @@ func (s *UserService) effectivePasswordMinLength() int {
 // Delete 删除指定用户。内置保护措施：禁止删除 ID 为 1 的用户（系统引导管理员），确保总有一个超级管理员账户存在。
 func (s *UserService) Delete(id int64) error {
 	if id == 1 {
-		return errors.New("cannot delete bootstrap admin")
+		return errors.New("无法删除系统初始管理员")
 	}
 	return s.store.DeleteUser(id)
 }
