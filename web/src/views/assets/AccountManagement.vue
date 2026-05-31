@@ -2,7 +2,7 @@
   <div class="account-management">
     <div class="toolbar">
       <el-button v-if="canCreateAccounts" type="primary" @click="openCreate">
-        Add Account
+        添加账号
       </el-button>
     </div>
 
@@ -12,26 +12,28 @@
       stripe
       border
     >
-      <el-table-column prop="name" label="Name" min-width="120" />
-      <el-table-column prop="username" label="Username" min-width="120" />
-      <el-table-column prop="secret_type" label="Secret Type" width="120" />
-      <el-table-column label="Status" width="100">
+      <el-table-column prop="name" label="名称" min-width="120" />
+      <el-table-column prop="username" label="用户名" min-width="120" />
+      <el-table-column prop="secret_type" label="凭据类型" width="120">
+        <template #default="{ row }">{{ formatSecretType(row.secret_type) }}</template>
+      </el-table-column>
+      <el-table-column label="状态" width="100">
         <template #default="{ row }">
           <el-tag :type="row.is_active ? 'success' : 'info'" size="small">
-            {{ row.is_active ? 'Active' : 'Inactive' }}
+            {{ row.is_active ? '活跃' : '停用' }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="Actions" width="160" fixed="right">
+      <el-table-column label="操作" width="160" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="canUpdateAccounts" size="small" type="primary" @click="openEdit(row)">Edit</el-button>
+          <el-button v-if="canUpdateAccounts" size="small" type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button
             v-if="canDeleteAccounts"
             size="small"
             type="danger"
             @click="handleDelete(row)"
           >
-            Delete
+            删除
           </el-button>
         </template>
       </el-table-column>
@@ -39,12 +41,12 @@
 
     <el-empty
       v-if="!loading && accounts.length === 0"
-      description="No accounts yet. Add one to get started."
+      description="暂无账号，请先添加账号。"
     />
 
     <el-dialog
       v-model="dialogVisible"
-      :title="isEditing ? 'Edit Account' : 'Add Account'"
+      :title="isEditing ? '编辑账号' : '添加账号'"
       width="560px"
       destroy-on-close
     >
@@ -54,19 +56,19 @@
         :rules="rules"
         label-width="130px"
       >
-        <el-form-item label="Name" prop="name">
-          <el-input v-model="form.name" placeholder="Account name" maxlength="128" />
+        <el-form-item label="名称" prop="name">
+          <el-input v-model="form.name" placeholder="账号名称" maxlength="128" />
         </el-form-item>
 
-        <el-form-item label="Username" prop="username">
-          <el-input v-model="form.username" placeholder="Login username" maxlength="128" />
+        <el-form-item label="用户名" prop="username">
+          <el-input v-model="form.username" placeholder="登录用户名" maxlength="128" />
         </el-form-item>
 
-        <el-form-item label="Secret Type" prop="secret_type">
+        <el-form-item label="凭据类型" prop="secret_type">
           <el-select v-model="form.secret_type" class="full-width" @change="onSecretTypeChange">
-            <el-option label="Password" value="password" />
-            <el-option label="SSH Key" value="ssh_key" />
-            <el-option label="Token" value="token" />
+            <el-option label="密码" value="password" />
+            <el-option label="SSH 私钥" value="ssh_key" />
+            <el-option label="令牌" value="token" />
           </el-select>
         </el-form-item>
 
@@ -92,7 +94,7 @@
           />
         </el-form-item>
 
-        <el-form-item v-if="form.secret_type === 'ssh_key'" label="SSH Key Type">
+        <el-form-item v-if="form.secret_type === 'ssh_key'" label="SSH 密钥类型">
           <el-select v-model="form.ssh_key_type" clearable class="full-width">
             <el-option label="RSA" value="rsa" />
             <el-option label="Ed25519" value="ed25519" />
@@ -100,21 +102,21 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item label="Passphrase">
+        <el-form-item label="私钥口令">
           <el-input
             v-model="form.passphrase"
             type="password"
             show-password
-            placeholder="Optional passphrase"
+            placeholder="可选私钥口令"
             maxlength="256"
           />
         </el-form-item>
 
-        <el-form-item label="SU Enabled">
+        <el-form-item label="启用 SU（切换用户）">
           <el-switch v-model="form.su_enabled" />
         </el-form-item>
 
-        <el-form-item v-if="form.su_enabled" label="SU Method">
+        <el-form-item v-if="form.su_enabled" label="SU 方式（切换方式）">
           <el-select v-model="form.su_method" class="full-width">
             <el-option label="su" value="su" />
             <el-option label="sudo" value="sudo" />
@@ -123,20 +125,20 @@
 
         <el-form-item
           v-if="isDatabasePlatform"
-          label="Database Name"
+          label="数据库名称"
         >
-          <el-input v-model="form.db_name" placeholder="Database name" maxlength="128" />
+          <el-input v-model="form.db_name" placeholder="数据库名称" maxlength="128" />
         </el-form-item>
 
-        <el-form-item label="Active">
+        <el-form-item label="活跃">
           <el-switch v-model="form.is_active" />
         </el-form-item>
       </el-form>
 
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
+        <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="handleSubmit">
-          {{ isEditing ? 'Update' : 'Create' }}
+          {{ isEditing ? '更新' : '创建' }}
         </el-button>
       </template>
     </el-dialog>
@@ -178,16 +180,16 @@ const canUpdateAccounts = computed(() => authStore.canAccess('account_update'))
 const canDeleteAccounts = computed(() => authStore.canAccess('account_delete'))
 
 const secretLabel = computed(() => {
-  if (form.secret_type === 'password') return 'Password'
-  if (form.secret_type === 'ssh_key') return 'SSH Private Key'
+  if (form.secret_type === 'password') return '密码'
+  if (form.secret_type === 'ssh_key') return 'SSH 私钥'
   return 'Token'
 })
 
 const secretPlaceholder = computed(() => {
   if (isEditing.value && !secretModified.value) {
-    return 'Leave empty to keep current secret'
+    return '留空则保持当前凭据不变'
   }
-  return form.secret_type === 'ssh_key' ? 'Paste private key...' : 'Enter secret'
+  return form.secret_type === 'ssh_key' ? '粘贴私钥...' : '输入凭据'
 })
 
 interface FormData {
@@ -217,10 +219,17 @@ const form = reactive<FormData>({
 })
 
 const rules: FormRules = {
-  name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
-  username: [{ required: true, message: 'Username is required', trigger: 'blur' }],
-  secret_type: [{ required: true, message: 'Secret type is required', trigger: 'change' }],
-  secret: [{ required: true, message: 'Secret is required', trigger: 'blur' }],
+  name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
+  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
+  secret_type: [{ required: true, message: '请选择凭据类型', trigger: 'change' }],
+  secret: [{ required: true, message: '请输入凭据', trigger: 'blur' }],
+}
+
+function formatSecretType(secretType: string): string {
+  if (secretType === 'password') return '密码'
+  if (secretType === 'ssh_key') return 'SSH 私钥'
+  if (secretType === 'token') return '令牌'
+  return secretType
 }
 
 function onSecretInput() {
@@ -295,15 +304,15 @@ async function handleSubmit() {
 
     if (isEditing.value && editingAccountId.value != null) {
       await assetsApi.updateAccount(props.assetId, editingAccountId.value, payload)
-      ElMessage.success('Account updated')
+      ElMessage.success('账号已更新')
     } else {
       await assetsApi.createAccount(props.assetId, payload)
-      ElMessage.success('Account created')
+      ElMessage.success('账号已创建')
     }
     dialogVisible.value = false
     await fetchAccounts()
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Save failed')
+    ElMessage.error(err instanceof Error ? err.message : '保存失败')
   } finally {
     submitting.value = false
   }
@@ -312,20 +321,20 @@ async function handleSubmit() {
 async function handleDelete(account: Account) {
   try {
     await ElMessageBox.confirm(
-      `Delete account "${account.name}"? This cannot be undone.`,
-      'Confirm Delete',
+      `确认删除账号“${account.name}”吗？此操作不可撤销。`,
+      '确认删除',
       {
-        confirmButtonText: 'Delete',
-        cancelButtonText: 'Cancel',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
         type: 'warning',
       },
     )
     await assetsApi.deleteAccount(props.assetId, account.id)
-    ElMessage.success('Account deleted')
+    ElMessage.success('账号已删除')
     accounts.value = accounts.value.filter((a) => a.id !== account.id)
   } catch (err) {
     if (err !== 'cancel' && err !== 'close') {
-      ElMessage.error(err instanceof Error ? err.message : 'Delete failed')
+      ElMessage.error(err instanceof Error ? err.message : '删除失败')
     }
   }
 }
@@ -335,7 +344,7 @@ async function fetchAccounts() {
   try {
     accounts.value = await assetsApi.listAccounts(props.assetId)
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Failed to load accounts')
+    ElMessage.error(err instanceof Error ? err.message : '加载账号失败')
   } finally {
     loading.value = false
   }

@@ -1,9 +1,9 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2>System Settings</h2>
+      <h2>系统设置</h2>
       <el-button type="primary" plain @click="router.push('/settings/ssh-fingerprint')">
-        SSH Fingerprints
+        SSH 指纹
       </el-button>
     </div>
 
@@ -17,7 +17,7 @@
       :closable="false"
     />
 
-    <el-empty v-else-if="!categories.length" description="No settings available" />
+    <el-empty v-else-if="!categories.length" description="暂无系统设置" />
 
     <el-tabs v-else v-model="activeCategory" type="border-card">
       <el-tab-pane
@@ -32,10 +32,10 @@
             :key="setting.key"
           >
             <template #label>
-              <span class="field-label">{{ setting.label }}</span>
+              <span class="field-label">{{ displaySettingLabel(setting) }}</span>
               <el-tooltip
                 v-if="setting.description"
-                :content="setting.description"
+                :content="displaySettingDescription(setting)"
                 placement="top"
                 effect="dark"
               >
@@ -58,7 +58,7 @@
                 :disabled="!canUpdateSettings || !isDirty(setting.key)"
                 @click="saveField(setting)"
               >
-                Save
+                保存
               </el-button>
             </div>
 
@@ -77,7 +77,7 @@
                 :disabled="!canUpdateSettings || !isDirty(setting.key)"
                 @click="saveField(setting)"
               >
-                Save
+                保存
               </el-button>
             </div>
 
@@ -90,7 +90,7 @@
                 @change="markDirty(setting.key)"
               >
                 <el-option
-                  v-for="opt in parseSelectOptions(setting.options)"
+                  v-for="opt in parseSelectOptions(setting.options, setting.key)"
                   :key="opt.value"
                   :label="opt.label"
                   :value="opt.value"
@@ -103,7 +103,7 @@
                 :disabled="!canUpdateSettings || !isDirty(setting.key)"
                 @click="saveField(setting)"
               >
-                Save
+                保存
               </el-button>
             </div>
 
@@ -113,8 +113,8 @@
                 v-model="fieldValues[setting.key]"
                 :loading="isSaving(setting.key)"
                 :disabled="!canUpdateSettings"
-                active-text="Enabled"
-                inactive-text="Disabled"
+                active-text="启用"
+                inactive-text="停用"
                 @change="autoSaveToggle(setting)"
               />
             </div>
@@ -127,7 +127,7 @@
                 show-password
                 :disabled="isSaving(setting.key)"
                 class="field-input"
-                placeholder="Enter new value to change"
+                placeholder="输入新值以修改"
                 @input="markDirty(setting.key)"
               />
               <el-button
@@ -137,7 +137,7 @@
                 :disabled="!canUpdateSettings || !isDirty(setting.key)"
                 @click="saveSecretField(setting)"
               >
-                Save
+                保存
               </el-button>
             </div>
           </el-form-item>
@@ -163,6 +163,121 @@ interface SelectOption {
   value: string
 }
 
+const categoryLabels: Record<string, string> = {
+  branding: '品牌',
+  proxy: '代理',
+  recording: '录像',
+  security: '安全',
+  sftp: '文件传输',
+  notification: '通知',
+  auth: '认证',
+}
+
+const settingLabels: Record<string, string> = {
+  'branding.logo_url': 'Logo 地址',
+  'branding.site_name': '站点名称',
+  'branding.theme_color': '主题色',
+  'proxy.session.max_duration': '会话最长持续时间',
+  'proxy.ssh.idle_timeout': 'SSH 空闲超时',
+  'proxy.ssh.max_connections': 'SSH 最大连接数',
+  'proxy.db.max_connections': 'DB 最大连接数',
+  'proxy.db.idle_timeout': 'DB 空闲超时',
+  'proxy.rdp.max_connections': 'RDP 最大连接数',
+  'proxy.rdp.idle_timeout': 'RDP 空闲超时',
+  'recording.local.path': '本地录像路径',
+  'recording.oss.access_key': 'OSS 访问密钥',
+  'recording.oss.bucket': 'OSS 存储桶',
+  'recording.oss.endpoint': 'OSS 接入点',
+  'recording.oss.secret_key': 'OSS 密钥',
+  'recording.s3.access_key': 'S3 访问密钥',
+  'recording.s3.bucket': 'S3 存储桶',
+  'recording.s3.endpoint': 'S3 接入点',
+  'recording.s3.secret_key': 'S3 密钥',
+  'recording.storage': '录像存储',
+  'sftp.max_file_size': 'SFTP 最大文件大小',
+  'sftp.deny_paths': 'SFTP 禁止路径',
+  'notification.smtp.host': 'SMTP 主机',
+  'notification.smtp.port': 'SMTP 端口',
+  'notification.smtp.username': 'SMTP 用户名',
+  'notification.smtp.password': 'SMTP 密码',
+  'notification.smtp.from': 'SMTP 发件人',
+  'notification.email.template': '邮件模板',
+  'security.login_failure_lock_enabled': '登录失败锁定',
+  'security.login_failure_lock_minutes': '登录失败锁定分钟数',
+  'security.login_failure_threshold': '登录失败阈值',
+  'security.mfa_required': '强制 MFA',
+  'security.password_min_length': '密码最小长度',
+  'security.session_timeout': '会话超时',
+  'auth.ldap.enabled': '启用 LDAP',
+  'auth.ldap.url': 'LDAP 地址',
+  'auth.ldap.bind_dn': 'LDAP 绑定 DN',
+  'auth.ldap.bind_password': 'LDAP 绑定密码',
+  'auth.ldap.user_search_base': 'LDAP 搜索基准',
+  'auth.oauth.enabled': '启用 OAuth',
+  'auth.oauth.client_id': 'OAuth Client ID',
+  'auth.oauth.client_secret': 'OAuth Client Secret',
+  'auth.oauth.auth_url': 'OAuth 授权地址',
+  'auth.oauth.token_url': 'OAuth Token 地址',
+  'auth.oauth.scopes': 'OAuth 权限范围',
+}
+
+const settingDescriptions: Record<string, string> = {
+  'branding.logo_url': '自定义 Logo 地址',
+  'branding.site_name': '页面可见的站点名称',
+  'branding.theme_color': '主主题色',
+  'proxy.session.max_duration': '代理会话最长持续时间（秒）',
+  'proxy.ssh.idle_timeout': 'SSH 空闲超时时间（秒）',
+  'proxy.ssh.max_connections': 'SSH 最大并发连接数',
+  'proxy.db.max_connections': '数据库代理最大并发连接数',
+  'proxy.db.idle_timeout': '数据库空闲超时时间（秒）',
+  'proxy.rdp.max_connections': 'RDP 最大并发连接数',
+  'proxy.rdp.idle_timeout': 'RDP 空闲超时时间（秒）',
+  'recording.local.path': '本地录像目录',
+  'recording.oss.access_key': 'OSS 访问密钥',
+  'recording.oss.bucket': 'OSS 存储桶名称',
+  'recording.oss.endpoint': 'OSS 接入点',
+  'recording.oss.secret_key': 'OSS 密钥',
+  'recording.s3.access_key': 'S3 访问密钥',
+  'recording.s3.bucket': 'S3 存储桶名称',
+  'recording.s3.endpoint': 'S3 或 MinIO 接入点',
+  'recording.s3.secret_key': 'S3 密钥',
+  'recording.storage': '录像存储后端',
+  'sftp.max_file_size': 'SFTP 文件大小上限',
+  'sftp.deny_paths': 'SFTP 禁止访问的路径',
+  'notification.smtp.host': 'SMTP 服务器地址',
+  'notification.smtp.port': 'SMTP 服务器端口',
+  'notification.smtp.username': 'SMTP 用户名',
+  'notification.smtp.password': 'SMTP 密码',
+  'notification.smtp.from': '默认发件人地址',
+  'notification.email.template': '默认通知邮件模板',
+  'security.login_failure_lock_enabled': '重复登录失败后锁定用户',
+  'security.login_failure_lock_minutes': '重复失败后的锁定时长',
+  'security.login_failure_threshold': '触发锁定前允许的登录失败次数',
+  'security.mfa_required': '要求所有用户启用 MFA',
+  'security.password_min_length': '密码最小长度',
+  'security.session_timeout': '最大会话持续时间（秒）',
+  'auth.ldap.enabled': '启用 LDAP 认证',
+  'auth.ldap.url': 'LDAP 服务器地址',
+  'auth.ldap.bind_dn': 'LDAP 绑定 DN',
+  'auth.ldap.bind_password': 'LDAP 绑定密码',
+  'auth.ldap.user_search_base': 'LDAP 用户搜索基准 DN',
+  'auth.oauth.enabled': '启用 OAuth 认证',
+  'auth.oauth.client_id': 'OAuth 客户端 ID',
+  'auth.oauth.client_secret': 'OAuth 客户端密钥',
+  'auth.oauth.auth_url': 'OAuth 授权端点',
+  'auth.oauth.token_url': 'OAuth Token 端点',
+  'auth.oauth.scopes': 'OAuth 权限范围，逗号分隔',
+}
+
+const selectValueLabels: Record<string, Record<string, string>> = {
+  'recording.storage': {
+    local: '本地',
+    s3: 'S3',
+    oss: 'OSS',
+    cos: 'COS',
+  },
+}
+
 const loading = ref(false)
 const error = ref('')
 const settingsByCategory = ref<SettingsByCategory>({})
@@ -180,34 +295,47 @@ const savingFields = reactive(new Set<string>())
 
 const categories = computed(() => Object.keys(settingsByCategory.value))
 
-function parseSelectOptions(raw: string | undefined): SelectOption[] {
+function translateSelectLabel(settingKey: string, value: string, fallback: string): string {
+  return selectValueLabels[settingKey]?.[value] ?? fallback
+}
+
+function parseSelectOptions(raw: string | undefined, settingKey: string): SelectOption[] {
   if (!raw) return []
   try {
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed) || parsed.length === 0) return []
-    // Array of objects with label/value
     if (typeof parsed[0] === 'object' && parsed[0] !== null) {
       return parsed.map((item: Record<string, unknown>, idx: number) => ({
-        label: String(item.label ?? item.value ?? String(idx)),
+        label: translateSelectLabel(
+          settingKey,
+          String(item.value ?? item.label ?? String(idx)),
+          String(item.label ?? item.value ?? String(idx)),
+        ),
         value: String(item.value ?? item.label ?? String(idx)),
       }))
     }
-    // Array of strings
     return parsed.map((item: unknown) => ({
-      label: String(item),
+      label: translateSelectLabel(settingKey, String(item), String(item)),
       value: String(item),
     }))
   } catch {
-    // Not valid JSON — treat as comma-separated
     return raw.split(',').map((s) => ({
-      label: s.trim(),
+      label: translateSelectLabel(settingKey, s.trim(), s.trim()),
       value: s.trim(),
     }))
   }
 }
 
 function formatCategoryName(category: string): string {
-  return category.charAt(0).toUpperCase() + category.slice(1)
+  return categoryLabels[category] ?? category
+}
+
+function displaySettingLabel(setting: Setting): string {
+  return settingLabels[setting.key] ?? setting.label
+}
+
+function displaySettingDescription(setting: Setting): string {
+  return settingDescriptions[setting.key] ?? setting.description
 }
 
 function isSaving(key: string): boolean {
@@ -265,7 +393,7 @@ async function fetchSettings(): Promise<void> {
       activeCategory.value = catKeys[0]
     }
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to load settings'
+    error.value = err instanceof Error ? err.message : '加载系统设置失败'
   } finally {
     loading.value = false
   }
@@ -285,10 +413,10 @@ async function saveField(setting: Setting): Promise<void> {
     if (key === 'branding.site_name') {
       appStore.setSiteName(parseSettingString(rawValue), route.meta?.title as string | undefined)
     }
-    ElMessage.success(`Saved "${setting.label}"`)
+    ElMessage.success(`已保存“${displaySettingLabel(setting)}”`)
   } catch (err) {
     ElMessage.error(
-      err instanceof Error ? err.message : `Failed to save "${setting.label}"`,
+      err instanceof Error ? err.message : `保存“${displaySettingLabel(setting)}”失败`,
     )
   } finally {
     savingFields.delete(key)
@@ -310,10 +438,10 @@ async function saveSecretField(setting: Setting): Promise<void> {
     fieldValues[key] = ''
     dirtyFields.delete(key)
     originalValues[key] = '******'
-    ElMessage.success(`Saved "${setting.label}"`)
+    ElMessage.success(`已保存“${displaySettingLabel(setting)}”`)
   } catch (err) {
     ElMessage.error(
-      err instanceof Error ? err.message : `Failed to save "${setting.label}"`,
+      err instanceof Error ? err.message : `保存“${displaySettingLabel(setting)}”失败`,
     )
   } finally {
     savingFields.delete(key)
@@ -331,14 +459,14 @@ async function autoSaveToggle(setting: Setting): Promise<void> {
     await settingsApi.update(key, rawValue)
     originalValues[key] = rawValue
     dirtyFields.delete(key)
-    ElMessage.success(`"${setting.label}" updated`)
+    ElMessage.success(`“${displaySettingLabel(setting)}”已更新`)
   } catch (err) {
     // Revert on failure
     if (originalValues[key] !== undefined) {
       fieldValues[key] = originalValues[key] === 'true'
     }
     ElMessage.error(
-      err instanceof Error ? err.message : `Failed to update "${setting.label}"`,
+      err instanceof Error ? err.message : `更新“${displaySettingLabel(setting)}”失败`,
     )
   } finally {
     savingFields.delete(key)

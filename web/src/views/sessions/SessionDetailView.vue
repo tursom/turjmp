@@ -4,11 +4,11 @@
     <div class="back-row">
       <el-button @click="$router.push('/sessions')">
         <el-icon><ArrowLeft /></el-icon>
-        Back to Sessions
+        返回会话
       </el-button>
     </div>
 
-    <h2>Session Detail #{{ sessionId }}</h2>
+    <h2>会话详情 #{{ sessionId }}</h2>
 
     <!-- Loading -->
     <div v-if="loading" class="loading-container">
@@ -17,9 +17,9 @@
 
     <!-- Error -->
     <div v-else-if="error" class="error-container">
-      <el-result icon="error" title="Failed to load session" :sub-title="error">
+      <el-result icon="error" title="加载会话失败" :sub-title="error">
         <template #extra>
-          <el-button type="primary" @click="loadSession">Retry</el-button>
+          <el-button type="primary" @click="loadSession">重试</el-button>
         </template>
       </el-result>
     </div>
@@ -30,30 +30,30 @@
         <el-descriptions-item label="ID">
           {{ session.id }}
         </el-descriptions-item>
-        <el-descriptions-item label="User ID">
+        <el-descriptions-item label="用户 ID">
           {{ session.user_id }}
         </el-descriptions-item>
-        <el-descriptions-item label="Asset ID">
+        <el-descriptions-item label="资产 ID">
           {{ session.asset_id }}
         </el-descriptions-item>
-        <el-descriptions-item label="Account ID">
+        <el-descriptions-item label="账号 ID">
           {{ session.account_id }}
         </el-descriptions-item>
-        <el-descriptions-item label="Protocol">
+        <el-descriptions-item label="协议">
           <el-tag>{{ session.protocol.toUpperCase() }}</el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="Type">
+        <el-descriptions-item label="类型">
           {{ session.type }}
         </el-descriptions-item>
-        <el-descriptions-item label="Login From">
+        <el-descriptions-item label="登录来源">
           <el-tag type="info" size="small">{{ session.login_from }}</el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="Remote Addr">
+        <el-descriptions-item label="远端地址">
           {{ session.remote_addr }}
         </el-descriptions-item>
-        <el-descriptions-item label="Recording Path" :span="2">
+        <el-descriptions-item label="录像路径" :span="2">
           <div class="recording-row">
-            <span>{{ session.recording_path || 'N/A' }}</span>
+            <span>{{ session.recording_path || '无' }}</span>
             <el-button
               v-if="session.recording_path"
               size="small"
@@ -62,28 +62,28 @@
               :loading="recordingLoading"
               @click="openRecording"
             >
-              Open Recording
+              打开录像
             </el-button>
           </div>
         </el-descriptions-item>
-        <el-descriptions-item label="Date Start">
+        <el-descriptions-item label="开始时间">
           {{ formatDate(session.date_start) }}
         </el-descriptions-item>
-        <el-descriptions-item label="Date End">
-          {{ session.date_end ? formatDate(session.date_end) : 'Still active' }}
+        <el-descriptions-item label="结束时间">
+          {{ session.date_end ? formatDate(session.date_end) : '仍在活跃' }}
         </el-descriptions-item>
-        <el-descriptions-item label="Status">
+        <el-descriptions-item label="状态">
           <el-tag :type="session.is_finished ? 'info' : 'success'">
-            {{ session.is_finished ? 'Finished' : 'Active' }}
+            {{ session.is_finished ? '已结束' : '活跃' }}
           </el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="Duration">
+        <el-descriptions-item label="持续时间">
           {{ computedDuration }}
         </el-descriptions-item>
-        <el-descriptions-item label="Created At">
+        <el-descriptions-item label="创建时间">
           {{ formatDate(session.created_at) }}
         </el-descriptions-item>
-        <el-descriptions-item label="Updated At">
+        <el-descriptions-item label="更新时间">
           {{ formatDate(session.updated_at) }}
         </el-descriptions-item>
       </el-descriptions>
@@ -91,21 +91,21 @@
       <el-card class="command-card" shadow="never">
         <template #header>
           <div class="card-header">
-            <span>Command Records</span>
-            <el-button link type="primary" @click="loadCommands">Refresh</el-button>
+            <span>命令记录</span>
+            <el-button link type="primary" @click="loadCommands">刷新</el-button>
           </div>
         </template>
-        <el-table v-loading="commandsLoading" :data="commands" stripe empty-text="No command records">
-          <el-table-column label="Time" width="180">
+        <el-table v-loading="commandsLoading" :data="commands" stripe empty-text="暂无命令记录">
+          <el-table-column label="时间" width="180">
             <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
           </el-table-column>
-          <el-table-column prop="action" label="Action" width="120" />
-          <el-table-column label="Command / SQL" min-width="260">
+          <el-table-column prop="action" label="动作" width="120" />
+          <el-table-column label="命令 / SQL" min-width="260">
             <template #default="{ row }">
               <code>{{ commandText(row.detail) }}</code>
             </template>
           </el-table-column>
-          <el-table-column label="Result" width="160">
+          <el-table-column label="结果" width="160">
             <template #default="{ row }">{{ commandResult(row.detail) }}</template>
           </el-table-column>
         </el-table>
@@ -138,7 +138,7 @@ const computedDuration = computed(() => {
   const start = dateMs(session.value.date_start)
   if (!start) return '-'
   const end = dateMs(session.value.date_end)
-  if (!end) return 'Ongoing'
+  if (!end) return '进行中'
   const diffMs = end - start
   if (diffMs < 0) return '-'
   const seconds = Math.floor(diffMs / 1000)
@@ -146,12 +146,12 @@ const computedDuration = computed(() => {
   const minutes = Math.floor((seconds % 3600) / 60)
   const secs = seconds % 60
   if (hours > 0) {
-    return `${hours}h ${minutes}m ${secs}s`
+    return `${hours}小时 ${minutes}分 ${secs}秒`
   }
   if (minutes > 0) {
-    return `${minutes}m ${secs}s`
+    return `${minutes}分 ${secs}秒`
   }
-  return `${secs}s`
+  return `${secs}秒`
 })
 
 function dateMs(dateStr: string | undefined | null): number | null {
@@ -171,7 +171,7 @@ async function loadSession() {
   try {
     session.value = await sessionsApi.get(sessionId.value)
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to load session'
+    const msg = err instanceof Error ? err.message : '加载会话失败'
     error.value = msg
   } finally {
     loading.value = false
@@ -195,12 +195,12 @@ async function openRecording() {
     const result = await sessionsApi.recording(sessionId.value)
     const target = result.download_url || result.url
     if (!result.available || !target) {
-      ElMessage.warning('Recording file is not available')
+      ElMessage.warning('录像文件不可用')
       return
     }
     globalThis.open(target, '_blank', 'noopener,noreferrer')
   } catch (err: unknown) {
-    ElMessage.error(err instanceof Error ? err.message : 'Failed to open recording')
+    ElMessage.error(err instanceof Error ? err.message : '打开录像失败')
   } finally {
     recordingLoading.value = false
   }
@@ -223,8 +223,8 @@ function commandText(detail: string): string {
 function commandResult(detail: string): string {
   const parsed = parseDetail(detail)
   if (parsed.error) return String(parsed.error)
-  if (parsed.rows_affected !== undefined) return `${String(parsed.rows_affected)} rows`
-  return 'OK'
+  if (parsed.rows_affected !== undefined) return `${String(parsed.rows_affected)} 行`
+  return '成功'
 }
 
 onMounted(() => {
