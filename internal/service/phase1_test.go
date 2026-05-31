@@ -125,6 +125,42 @@ func TestPhase1AuthLoginRefreshLogoutAndMFA(t *testing.T) {
 		t.Fatalf("logout refresh err=%v, want unauthorized", err)
 	}
 
+	if err := store.UpsertSetting(domain.Setting{
+		Key:       "security.mfa_required",
+		Value:     `true`,
+		Category:  "security",
+		InputType: "toggle",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	setupRequired, err := authSvc.Login("admin", "admin123", "")
+	if err != nil {
+		t.Fatalf("forced MFA setup login err=%v", err)
+	}
+	if !setupRequired.RequireMFASetup || setupRequired.AccessToken == "" || len(setupRequired.Roles) != 0 {
+		t.Fatalf("forced MFA setup result=%#v, want setup-only tokens without roles", setupRequired)
+	}
+	if setupClaims, err := authSvc.ParseAccessToken(setupRequired.AccessToken); err != nil {
+		t.Fatal(err)
+	} else if len(setupClaims.Roles) != 0 {
+		t.Fatalf("setup-only claims roles=%v, want none", setupClaims.Roles)
+	}
+	refreshedSetup, err := authSvc.Refresh(setupRequired.RefreshToken)
+	if err != nil {
+		t.Fatalf("forced MFA setup refresh err=%v", err)
+	}
+	if !refreshedSetup.RequireMFASetup || len(refreshedSetup.Roles) != 0 {
+		t.Fatalf("forced MFA setup refresh=%#v, want setup-only tokens", refreshedSetup)
+	}
+	if err := store.UpsertSetting(domain.Setting{
+		Key:       "security.mfa_required",
+		Value:     `false`,
+		Category:  "security",
+		InputType: "toggle",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	setup, err := authSvc.SetupMFA(login.User.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -136,13 +172,50 @@ func TestPhase1AuthLoginRefreshLogoutAndMFA(t *testing.T) {
 	if err := authSvc.VerifyMFA(login.User.ID, code); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := authSvc.Login("admin", "admin123", ""); !errors.Is(err, domain.ErrUnauthorized) {
-		t.Fatalf("login without MFA err=%v, want unauthorized", err)
+	if mfaRequired, err := authSvc.Login("admin", "admin123", ""); err != nil {
+		t.Fatalf("login without MFA err=%v", err)
+	} else if !mfaRequired.RequireMFA || mfaRequired.AccessToken != "" {
+		t.Fatalf("login without MFA result=%#v, want MFA challenge without tokens", mfaRequired)
 	}
 	if mfaLogin, err := authSvc.Login("admin", "admin123", code); err != nil {
 		t.Fatal(err)
 	} else if !mfaLogin.User.MFAEnabled {
 		t.Fatalf("expected MFA enabled user, got %#v", mfaLogin.User)
+	}
+	if _, err := authSvc.SetupMFA(login.User.ID); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("setup enabled MFA err=%v, want conflict", err)
+	}
+	if _, err := authSvc.Login("admin", "admin123", code); err != nil {
+		t.Fatalf("existing MFA code should remain valid after rejected setup: %v", err)
+	}
+}
+
+func TestPhase1RefreshRejectsInactiveUsers(t *testing.T) {
+	store, closeFn := newMigratedTestStore(t)
+	defer closeFn()
+	cfg := phase1ServiceConfig(t)
+	jwtMgr, err := auth.NewJWTManager(cfg.JWT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authSvc := NewAuthService(store, jwtMgr, cfg)
+	userSvc := NewUserService(store, 8)
+
+	login, err := authSvc.Login("admin", "admin123", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inactive := false
+	if _, err := userSvc.Update(login.User.ID, UpdateUserInput{
+		Username: login.User.Username,
+		Name:     login.User.Name,
+		Email:    login.User.Email,
+		IsActive: &inactive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authSvc.Refresh(login.RefreshToken); !errors.Is(err, domain.ErrUnauthorized) {
+		t.Fatalf("inactive refresh err=%v, want unauthorized", err)
 	}
 }
 
@@ -191,6 +264,22 @@ func TestPhase1SettingsMaskAndEncryptSecretValues(t *testing.T) {
 	}
 	if public.Value != `"Jumpbox"` {
 		t.Fatalf("public setting was unexpectedly masked: %#v", public)
+	}
+	if _, err := settings.Update("security.password_min_length", "12"); err != nil {
+		t.Fatal(err)
+	}
+	users := NewUserService(store, 8)
+	if _, err := users.Create(CreateUserInput{
+		Username: "short-password",
+		Password: "12345678",
+	}); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("short password err=%v, want invalid argument", err)
+	}
+	if _, err := users.Create(CreateUserInput{
+		Username: "long-password",
+		Password: "123456789012",
+	}); err != nil {
+		t.Fatalf("long password should satisfy DB-backed policy: %v", err)
 	}
 	grouped, err := settings.List()
 	if err != nil {
@@ -249,10 +338,33 @@ func TestPhase1TokenDefaultsPermissionsAndReusableVerify(t *testing.T) {
 		t.Fatalf("issue without permission err=%v, want forbidden", err)
 	}
 
+	nodes, err := store.ListNodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) == 0 {
+		t.Fatal("missing root node")
+	}
+	rootID := nodes[0].ID
+	var childNodeID int64
+	if err := store.DB().Get(&childNodeID, `INSERT INTO nodes (name, parent_id, org_id) VALUES ('Child', ?, 1) RETURNING id`, rootID); err != nil {
+		t.Fatal(err)
+	}
+	asset.NodeID = &childNodeID
+	if err := store.UpdateAsset(&asset); err != nil {
+		t.Fatal(err)
+	}
+	var groupID int64
+	if err := store.DB().Get(&groupID, `INSERT INTO user_groups (name, org_id) VALUES ('ops', 1) RETURNING id`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`INSERT INTO group_users (group_id, user_id) VALUES (?, ?)`, groupID, user.ID); err != nil {
+		t.Fatal(err)
+	}
 	permission := domain.AssetPermission{Name: "connect test", Actions: "connect", IsActive: true}
 	if err := store.CreatePermission(&permission, repository.PermissionLinks{
-		UserIDs:    []int64{user.ID},
-		AssetIDs:   []int64{asset.ID},
+		GroupIDs:   []int64{groupID},
+		NodeIDs:    []int64{rootID},
 		AccountIDs: []int64{account.ID},
 	}); err != nil {
 		t.Fatal(err)

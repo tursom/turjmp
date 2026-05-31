@@ -4,12 +4,22 @@
 package handler
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/casbin/casbin/v2"
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 	"github.com/gin-gonic/gin"
 
 	"github.com/tursom/turjmp/internal/api/httpx"
@@ -45,6 +55,52 @@ type Handler struct {
 	Store *repository.Store
 	// Enforcer Casbin 权限执行器：用于角色权限策略的管理和查询
 	Enforcer *casbin.Enforcer
+
+	streamMu     sync.Mutex
+	streamTokens map[string]streamToken
+}
+
+type streamToken struct {
+	Principal httpx.Principal
+	ExpiresAt time.Time
+}
+
+type accessCheck struct {
+	Key    string
+	Object string
+	Method string
+}
+
+var consoleAccessChecks = []accessCheck{
+	{Key: "dashboard", Object: "/api/v1/dashboard/summary", Method: http.MethodGet},
+	{Key: "assets", Object: "/api/v1/assets", Method: http.MethodGet},
+	{Key: "asset_create", Object: "/api/v1/assets", Method: http.MethodPost},
+	{Key: "asset_update", Object: "/api/v1/assets/:id", Method: http.MethodPut},
+	{Key: "asset_delete", Object: "/api/v1/assets/:id", Method: http.MethodDelete},
+	{Key: "accounts", Object: "/api/v1/assets/:id/accounts", Method: http.MethodGet},
+	{Key: "account_create", Object: "/api/v1/assets/:id/accounts", Method: http.MethodPost},
+	{Key: "account_update", Object: "/api/v1/assets/:id/accounts/:aid", Method: http.MethodPut},
+	{Key: "account_delete", Object: "/api/v1/assets/:id/accounts/:aid", Method: http.MethodDelete},
+	{Key: "platforms", Object: "/api/v1/platforms", Method: http.MethodGet},
+	{Key: "platform_create", Object: "/api/v1/platforms", Method: http.MethodPost},
+	{Key: "users", Object: "/api/v1/users", Method: http.MethodGet},
+	{Key: "user_create", Object: "/api/v1/users", Method: http.MethodPost},
+	{Key: "user_update", Object: "/api/v1/users/:id", Method: http.MethodPut},
+	{Key: "user_delete", Object: "/api/v1/users/:id", Method: http.MethodDelete},
+	{Key: "roles", Object: "/api/v1/roles", Method: http.MethodGet},
+	{Key: "role_create", Object: "/api/v1/roles", Method: http.MethodPost},
+	{Key: "role_update", Object: "/api/v1/roles/:id", Method: http.MethodPut},
+	{Key: "role_delete", Object: "/api/v1/roles/:id", Method: http.MethodDelete},
+	{Key: "permissions", Object: "/api/v1/permissions", Method: http.MethodGet},
+	{Key: "permission_create", Object: "/api/v1/permissions", Method: http.MethodPost},
+	{Key: "permission_update", Object: "/api/v1/permissions/:id", Method: http.MethodPut},
+	{Key: "permission_delete", Object: "/api/v1/permissions/:id", Method: http.MethodDelete},
+	{Key: "sessions", Object: "/api/v1/sessions", Method: http.MethodGet},
+	{Key: "session_force_finish", Object: "/api/v1/sessions/:id/force-finish", Method: http.MethodPost},
+	{Key: "connection_tokens", Object: "/api/v1/authentication/connection-tokens/", Method: http.MethodPost},
+	{Key: "audit_logs", Object: "/api/v1/audit-logs", Method: http.MethodGet},
+	{Key: "settings", Object: "/api/v1/settings", Method: http.MethodGet},
+	{Key: "setting_update", Object: "/api/v1/settings/:key", Method: http.MethodPut},
 }
 
 // Login 处理用户登录请求。
@@ -84,6 +140,20 @@ func (h *Handler) Refresh(c *gin.Context) {
 		return
 	}
 	httpx.JSON(c, 200, result)
+}
+
+// Access returns the current user's effective console capabilities using Casbin policies.
+func (h *Handler) Access(c *gin.Context) {
+	principal, err := httpx.MustPrincipal(c)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	access := make(map[string]bool, len(consoleAccessChecks))
+	for _, check := range consoleAccessChecks {
+		access[check.Key] = h.isAllowed(principal, check.Object, check.Method)
+	}
+	httpx.JSON(c, 200, gin.H{"access": access})
 }
 
 // Logout 处理用户登出请求，撤销当前用户的所有 refresh_token。
@@ -214,6 +284,17 @@ func (h *Handler) ListRoles(c *gin.Context) {
 	httpx.JSON(c, 200, roles)
 }
 
+// ListUserGroups 查询所有用户组列表。
+// 端点：GET /api/v1/user-groups（需 JWT 认证 + RBAC 鉴权）
+func (h *Handler) ListUserGroups(c *gin.Context) {
+	groups, err := h.Store.ListUserGroups()
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, groups)
+}
+
 // CreateRole 创建新角色。
 // 端点：POST /api/v1/roles（需 JWT 认证 + RBAC 鉴权）
 // 请求体：{name}
@@ -254,17 +335,87 @@ func (h *Handler) UpdateRole(c *gin.Context) {
 		return
 	}
 	role.ID = pathID(c, "id")
+	oldRole, err := h.Store.GetRole(role.ID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
 	if err := h.Store.UpdateRole(&role); err != nil {
 		httpx.Error(c, err)
 		return
 	}
+	if oldRole.Name != role.Name {
+		if err := h.renameRolePolicies(oldRole.Name, role.Name); err != nil {
+			_ = h.Store.UpdateRole(&oldRole)
+			httpx.Error(c, err)
+			return
+		}
+	}
 	httpx.JSON(c, 200, role)
+}
+
+// renameRolePolicies keeps Casbin policies aligned when a role's display name
+// changes, because role names are used as the policy subject.
+func (h *Handler) renameRolePolicies(oldName, newName string) error {
+	policies, err := h.Enforcer.GetFilteredPolicy(0, oldName)
+	if err != nil {
+		return err
+	}
+	if len(policies) == 0 {
+		return nil
+	}
+	if _, err := h.Enforcer.RemoveFilteredPolicy(0, oldName); err != nil {
+		return err
+	}
+	for _, policy := range policies {
+		if len(policy) < 3 {
+			continue
+		}
+		if _, err := h.Enforcer.AddPolicy(newName, policy[1], policy[2]); err != nil {
+			_ = h.restoreRolePolicies(newName, oldName, policies)
+			return err
+		}
+	}
+	if err := h.Enforcer.SavePolicy(); err != nil {
+		_ = h.restoreRolePolicies(newName, oldName, policies)
+		return err
+	}
+	return nil
+}
+
+func (h *Handler) restoreRolePolicies(removeName, restoreName string, policies [][]string) error {
+	_, _ = h.Enforcer.RemoveFilteredPolicy(0, removeName)
+	for _, policy := range policies {
+		if len(policy) < 3 {
+			continue
+		}
+		if _, err := h.Enforcer.AddPolicy(restoreName, policy[1], policy[2]); err != nil {
+			return err
+		}
+	}
+	return h.Enforcer.SavePolicy()
+}
+
+func (h *Handler) clearRolePolicies(name string) error {
+	if _, err := h.Enforcer.RemoveFilteredPolicy(0, name); err != nil {
+		return err
+	}
+	return h.Enforcer.SavePolicy()
 }
 
 // DeleteRole 删除角色。若角色已被分配给用户，删除将失败。
 // 端点：DELETE /api/v1/roles/:id（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) DeleteRole(c *gin.Context) {
-	if err := h.Store.DeleteRole(pathID(c, "id")); err != nil {
+	role, err := h.Store.GetRole(pathID(c, "id"))
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if err := h.Store.DeleteRole(role.ID); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if err := h.clearRolePolicies(role.Name); err != nil {
 		httpx.Error(c, err)
 		return
 	}
@@ -289,7 +440,10 @@ func (h *Handler) SetRolePermissions(c *gin.Context) {
 	if !middleware.RequireJSON(c, &req) {
 		return
 	}
-	_, _ = h.Enforcer.RemoveFilteredPolicy(0, role.Name)
+	if _, err := h.Enforcer.RemoveFilteredPolicy(0, role.Name); err != nil {
+		httpx.Error(c, err)
+		return
+	}
 	for _, permission := range req.Permissions {
 		if _, err := h.Enforcer.AddPolicy(role.Name, permission.Path, permission.Method); err != nil {
 			httpx.Error(c, err)
@@ -319,12 +473,82 @@ func (h *Handler) ListPlatforms(c *gin.Context) {
 	httpx.JSON(c, 200, platforms)
 }
 
+// ListPlatformProtocols 查询指定平台的协议端口配置。
+// 端点：GET /api/v1/platforms/:id/protocols（需 JWT 认证 + RBAC 鉴权）
+func (h *Handler) ListPlatformProtocols(c *gin.Context) {
+	protocols, err := h.Store.ListPlatformProtocols(pathID(c, "id"))
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, protocols)
+}
+
+// CreatePlatform 创建或更新资产平台模板。
+// 端点：POST /api/v1/platforms（需 JWT 认证 + RBAC 鉴权）
+func (h *Handler) CreatePlatform(c *gin.Context) {
+	var req struct {
+		Name        string `json:"name"`
+		Type        string `json:"type"`
+		Description string `json:"description"`
+		Protocol    string `json:"protocol"`
+		Port        int    `json:"port"`
+	}
+	if !middleware.RequireJSON(c, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Type) == "" {
+		httpx.Error(c, domain.ErrInvalidArgument)
+		return
+	}
+	platform, err := h.Store.UpsertPlatform(req.Name, req.Type, req.Description)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if strings.TrimSpace(req.Protocol) != "" {
+		if req.Port <= 0 {
+			httpx.Error(c, domain.ErrInvalidArgument)
+			return
+		}
+		if err := h.Store.UpsertPlatformProtocol(platform.ID, req.Protocol, req.Port); err != nil {
+			httpx.Error(c, err)
+			return
+		}
+	}
+	httpx.Created(c, platform)
+}
+
 // ListAssets 查询所有资产列表。
 // 端点：GET /api/v1/assets（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) ListAssets(c *gin.Context) {
 	assets, err := h.Assets.ListAssets()
 	if err != nil {
 		httpx.Error(c, err)
+		return
+	}
+	assets = filterAssets(assets, c)
+	if c.Query("page") != "" || c.Query("per_page") != "" {
+		page, perPage := queryPagination(c, 1, 20, 100)
+		total := len(assets)
+		start := (page - 1) * perPage
+		if start > total {
+			start = total
+		}
+		end := start + perPage
+		if end > total {
+			end = total
+		}
+		items := assets[start:end]
+		if items == nil {
+			items = []domain.AssetWithPlatform{}
+		}
+		httpx.JSON(c, 200, gin.H{
+			"items":    items,
+			"total":    total,
+			"page":     page,
+			"per_page": perPage,
+		})
 		return
 	}
 	httpx.JSON(c, 200, assets)
@@ -334,11 +558,11 @@ func (h *Handler) ListAssets(c *gin.Context) {
 // 端点：POST /api/v1/assets（需 JWT 认证 + RBAC 鉴权）
 // 请求体包含资产名称、IP、端口、平台ID、资产组ID、描述等信息
 func (h *Handler) CreateAsset(c *gin.Context) {
-	var asset domain.Asset
-	if !middleware.RequireJSON(c, &asset) {
+	var req service.AssetInput
+	if !middleware.RequireJSON(c, &req) {
 		return
 	}
-	created, err := h.Assets.CreateAsset(asset)
+	created, err := h.Assets.CreateAsset(req)
 	if err != nil {
 		httpx.Error(c, err)
 		return
@@ -545,17 +769,20 @@ func (h *Handler) IssueConnectionToken(c *gin.Context) {
 // GET 方法：参数通过 URL 查询字符串传递，适合浏览器直接打开下载链接
 // POST 方法：参数通过 JSON 请求体传递，支持更丰富的连接配置
 // 请求流程：
-//   1. bindSDKURLInput：根据请求方法绑定参数（GET 从查询字符串提取，POST 绑定 JSON 体）
-//   2. MustPrincipal：从 JWT 中获取当前认证用户信息
-//   3. proxy_host 为空时，默认使用请求的 Host/X-Forwarded-Host 头
-//   4. BuildSDKURL：调用 TokenService 构造带签名 Token 的连接 URL，返回连接信息和可下载的文件内容
+//  1. bindSDKURLInput：根据请求方法绑定参数（GET 从查询字符串提取，POST 绑定 JSON 体）
+//  2. MustPrincipal：从 JWT 中获取当前认证用户信息
+//  3. proxy_host 为空时，默认使用请求的 Host/X-Forwarded-Host 头
+//  4. BuildSDKURL：调用 TokenService 构造带签名 Token 的连接 URL，返回连接信息和可下载的文件内容
+//
 // 请求参数（GET 查询字符串）：
-//   asset_id（必填）：目标资产 ID，正整数
-//   account_id（必填）：SSH 账户 ID，正整数
-//   protocol（可选）：连接协议，如 ssh、rdp，默认 ssh
-//   connect_method（可选）：连接方式，如 direct、gateway
-//   proxy_host（可选）：代理服务器地址，为空时自动使用请求的 Host 头
-//   format（可选）：返回格式，如 json、rdp_file、ssh_config，默认 json
+//
+//	asset_id（必填）：目标资产 ID，正整数
+//	account_id（必填）：SSH 账户 ID，正整数
+//	protocol（可选）：连接协议，如 ssh、rdp，默认 ssh
+//	connect_method（可选）：连接方式，如 direct、gateway
+//	proxy_host（可选）：代理服务器地址，为空时自动使用请求的 Host 头
+//	format（可选）：返回格式，如 json、rdp_file、ssh_config，默认 json
+//
 // 响应体包含 token、expires_at、url 和可选的连接文件内容
 func (h *Handler) SDKConnectionToken(c *gin.Context) {
 	req, ok := bindSDKURLInput(c)
@@ -663,6 +890,21 @@ func (h *Handler) ProxyCreateSession(c *gin.Context) {
 	httpx.Created(c, created)
 }
 
+// ProxyGetSession 供代理组件查询会话当前状态。
+// 认证方式：通过 X-Proxy-Auth 请求头进行代理认证。
+func (h *Handler) ProxyGetSession(c *gin.Context) {
+	if !h.proxyAuthorized(c) {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return
+	}
+	session, err := h.Sessions.Get(pathID(c, "id"))
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, session)
+}
+
 // ProxyUpdateSession 供代理组件更新 SSH 会话状态（结束标记、录像路径）
 // 认证方式：通过 X-Proxy-Auth 请求头进行代理认证
 // 请求参数：路径参数 id（会话ID），请求体 is_finished（是否结束）、recording_path（录像文件路径）
@@ -744,6 +986,75 @@ func (h *Handler) ProxyCreateAuditLog(c *gin.Context) {
 	httpx.NoContent(c)
 }
 
+// DashboardSummary 返回管理控制台仪表盘所需的聚合统计，避免前端拉取全量会话后自行聚合。
+// 端点：GET /api/v1/dashboard/summary（需 JWT 认证 + RBAC 鉴权）
+func (h *Handler) DashboardSummary(c *gin.Context) {
+	assets, err := h.Assets.ListAssets()
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	sessions, err := h.Sessions.List()
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	now := time.Now().UTC()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	activeUsers := map[int64]struct{}{}
+	activeSessions := 0
+	todaySessions := 0
+	for _, session := range sessions {
+		if !session.IsFinished {
+			activeSessions++
+			activeUsers[session.UserID] = struct{}{}
+		}
+		if !session.DateStart.Before(todayStart) {
+			todaySessions++
+		}
+	}
+	recent := sessions
+	if len(recent) > 10 {
+		recent = recent[:10]
+	}
+	httpx.JSON(c, 200, gin.H{
+		"total_assets":    len(assets),
+		"active_sessions": activeSessions,
+		"today_sessions":  todaySessions,
+		"active_users":    len(activeUsers),
+		"recent_sessions": recent,
+		"generated_at":    now,
+	})
+}
+
+// IssueSessionStreamToken 签发短期一次性 WebSocket token，避免浏览器把 JWT access token 放进 URL。
+// 端点：POST /api/v1/sessions/stream-token（需 JWT 认证 + RBAC 鉴权）
+func (h *Handler) IssueSessionStreamToken(c *gin.Context) {
+	principal, err := httpx.MustPrincipal(c)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	token, err := newOpaqueToken()
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	expiresAt := time.Now().UTC().Add(60 * time.Second)
+	h.streamMu.Lock()
+	if h.streamTokens == nil {
+		h.streamTokens = make(map[string]streamToken)
+	}
+	for key, value := range h.streamTokens {
+		if time.Now().UTC().After(value.ExpiresAt) {
+			delete(h.streamTokens, key)
+		}
+	}
+	h.streamTokens[token] = streamToken{Principal: principal, ExpiresAt: expiresAt}
+	h.streamMu.Unlock()
+	httpx.Created(c, gin.H{"token": token, "expires_at": expiresAt, "expires_in": 60})
+}
+
 // ListSessions 查询所有 SSH 会话记录列表。
 // 端点：GET /api/v1/sessions（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) ListSessions(c *gin.Context) {
@@ -752,7 +1063,43 @@ func (h *Handler) ListSessions(c *gin.Context) {
 		httpx.Error(c, err)
 		return
 	}
+	sessions = filterSessions(sessions, c)
 	httpx.JSON(c, 200, sessions)
+}
+
+// StreamSessions 通过 WebSocket 推送会话列表快照，供管理控制台实时刷新在线会话。
+// 浏览器 WebSocket 无法设置 Authorization 头，因此前端需先用 /sessions/stream-token 换取短期一次性 stream_token。
+func (h *Handler) StreamSessions(c *gin.Context) {
+	if !h.authorizeWebSocket(c, "/api/v1/sessions", http.MethodGet) {
+		return
+	}
+	conn, err := websocket.Accept(c.Writer, c.Request, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	ctx := c.Request.Context()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		if err := h.writeSessionSnapshot(ctx, conn, c); err != nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (h *Handler) writeSessionSnapshot(ctx context.Context, conn *websocket.Conn, c *gin.Context) error {
+	sessions, err := h.Sessions.List()
+	if err != nil {
+		return err
+	}
+	sessions = filterSessions(sessions, c)
+	return wsjson.Write(ctx, conn, gin.H{"type": "sessions", "sessions": sessions})
 }
 
 // CreateSession 创建新的 SSH 会话记录。
@@ -782,23 +1129,87 @@ func (h *Handler) GetSession(c *gin.Context) {
 	httpx.JSON(c, 200, session)
 }
 
-// UpdateSession 更新会话记录（标记结束状态、录像路径等）。
-// 端点：PATCH /api/v1/sessions/:id（需 JWT 认证 + RBAC 鉴权）
-// 请求体：{is_finished, recording_path}
-func (h *Handler) UpdateSession(c *gin.Context) {
-	var req struct {
-		IsFinished    bool   `json:"is_finished"`
-		RecordingPath string `json:"recording_path"`
-	}
-	if !middleware.RequireJSON(c, &req) {
-		return
-	}
-	session, err := h.Sessions.Update(pathID(c, "id"), req.IsFinished, req.RecordingPath)
+// SessionRecording returns a downloadable recording URL for a finished session.
+// Local files are served back through this authenticated endpoint; remote URLs are returned as-is.
+func (h *Handler) SessionRecording(c *gin.Context) {
+	session, err := h.Sessions.Get(pathID(c, "id"))
 	if err != nil {
 		httpx.Error(c, err)
 		return
 	}
+	recordingPath := strings.TrimSpace(session.RecordingPath)
+	if recordingPath == "" {
+		httpx.Error(c, domain.ErrNotFound)
+		return
+	}
+	if isRemoteRecordingURL(recordingPath) {
+		if c.Query("download") == "1" {
+			c.Redirect(http.StatusFound, recordingPath)
+			return
+		}
+		httpx.JSON(c, http.StatusOK, gin.H{
+			"recording_path": recordingPath,
+			"url":            recordingPath,
+			"download_url":   recordingPath,
+			"available":      true,
+		})
+		return
+	}
+	if !h.isAllowedLocalRecordingPath(recordingPath) {
+		httpx.JSON(c, http.StatusOK, gin.H{
+			"recording_path": recordingPath,
+			"url":            "",
+			"download_url":   "",
+			"available":      false,
+		})
+		return
+	}
+	info, err := os.Stat(recordingPath)
+	if err != nil || info.IsDir() {
+		httpx.JSON(c, http.StatusOK, gin.H{
+			"recording_path": recordingPath,
+			"url":            "",
+			"download_url":   "",
+			"available":      false,
+		})
+		return
+	}
+	downloadURL := "/api/v1/sessions/" + strconv.FormatInt(session.ID, 10) + "/recording?download=1"
+	if c.Query("download") == "1" {
+		c.FileAttachment(recordingPath, filepath.Base(recordingPath))
+		return
+	}
+	httpx.JSON(c, http.StatusOK, gin.H{
+		"recording_path": recordingPath,
+		"url":            downloadURL,
+		"download_url":   downloadURL,
+		"available":      true,
+	})
+}
+
+// ForceFinishSession 强制将会话标记为结束，并写入管理审计日志。
+// 端点：POST /api/v1/sessions/:id/force-finish（需 JWT 认证 + RBAC 鉴权）
+func (h *Handler) ForceFinishSession(c *gin.Context) {
+	session, err := h.Sessions.ForceFinish(pathID(c, "id"))
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if principal, err := httpx.MustPrincipal(c); err == nil {
+		_ = h.Store.Audit(&principal.UserID, "session.force_finish", strconv.FormatInt(session.ID, 10), c.ClientIP(), "{}")
+	}
 	httpx.JSON(c, 200, session)
+}
+
+// ListSessionCommands 查询指定会话关联的命令/SQL审计记录。
+// 端点：GET /api/v1/sessions/:id/commands（需 JWT 认证 + RBAC 鉴权）
+func (h *Handler) ListSessionCommands(c *gin.Context) {
+	logs, err := h.Store.ListSessionCommandLogs(pathID(c, "id"))
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, logs)
 }
 
 // ListSettings 查询所有系统配置项列表。
@@ -844,12 +1255,141 @@ func (h *Handler) UpdateSetting(c *gin.Context) {
 // ListAuditLogs 查询所有审计日志记录。
 // 端点：GET /api/v1/audit-logs（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) ListAuditLogs(c *gin.Context) {
-	logs, err := h.Store.ListAuditLogs()
+	page, perPage := queryPagination(c, 1, 50, 500)
+	logs, total, err := h.Store.ListAuditLogs(repository.AuditLogFilter{
+		Search:   firstQuery(c, "q", "search"),
+		UserID:   queryInt64OrZero(c.Query("user_id")),
+		Action:   c.Query("action"),
+		DateFrom: queryTime(c.Query("date_from"), false),
+		DateTo:   queryTime(c.Query("date_to"), true),
+		Limit:    perPage,
+		Offset:   (page - 1) * perPage,
+	})
 	if err != nil {
 		httpx.Error(c, err)
 		return
 	}
-	httpx.JSON(c, 200, logs)
+	if logs == nil {
+		logs = []domain.AuditLog{}
+	}
+	httpx.JSON(c, 200, gin.H{
+		"items":    logs,
+		"total":    total,
+		"page":     page,
+		"per_page": perPage,
+	})
+}
+
+func (h *Handler) authorizeWebSocket(c *gin.Context, object, method string) bool {
+	streamToken := strings.TrimSpace(c.Query("stream_token"))
+	if streamToken != "" {
+		principal, ok := h.consumeStreamToken(streamToken)
+		if !ok {
+			httpx.Error(c, domain.ErrUnauthorized)
+			return false
+		}
+		return h.authorizePrincipal(c, principal, object, method)
+	}
+	rawToken := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+	if rawToken == "" {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return false
+	}
+	claims, err := h.Auth.ParseAccessToken(rawToken)
+	if err != nil {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return false
+	}
+	principal := httpx.PrincipalFromClaims(claims)
+	return h.authorizePrincipal(c, principal, object, method)
+}
+
+func (h *Handler) authorizePrincipal(c *gin.Context, principal httpx.Principal, object, method string) bool {
+	if h.isAllowed(principal, object, method) {
+		httpx.SetPrincipal(c, principal)
+		return true
+	}
+	httpx.Error(c, domain.ErrForbidden)
+	return false
+}
+
+func (h *Handler) isAllowed(principal httpx.Principal, object, method string) bool {
+	subjects := append([]string{principal.Username}, principal.Roles...)
+	for _, subject := range subjects {
+		allowed, err := h.Enforcer.Enforce(subject, object, method)
+		if err != nil {
+			return false
+		}
+		if allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func isRemoteRecordingURL(recordingPath string) bool {
+	lower := strings.ToLower(recordingPath)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
+func (h *Handler) isAllowedLocalRecordingPath(recordingPath string) bool {
+	allowedDirs := []string{h.Config.Proxy.RDP.RecordingDir()}
+	if setting, err := h.Store.GetSetting("recording.local.path"); err == nil {
+		allowedDirs = append(allowedDirs, settingStringValue(setting.Value))
+	}
+	recordingAbs, err := filepath.Abs(recordingPath)
+	if err != nil {
+		return false
+	}
+	recordingAbs = filepath.Clean(recordingAbs)
+	for _, dir := range allowedDirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		dirAbs, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		dirAbs = filepath.Clean(dirAbs)
+		if recordingAbs == dirAbs || strings.HasPrefix(recordingAbs, dirAbs+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func settingStringValue(raw string) string {
+	var decoded string
+	if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
+		return decoded
+	}
+	return strings.Trim(raw, `"`)
+}
+
+func (h *Handler) consumeStreamToken(token string) (httpx.Principal, bool) {
+	h.streamMu.Lock()
+	defer h.streamMu.Unlock()
+	if h.streamTokens == nil {
+		return httpx.Principal{}, false
+	}
+	value, ok := h.streamTokens[token]
+	if !ok {
+		return httpx.Principal{}, false
+	}
+	delete(h.streamTokens, token)
+	if time.Now().UTC().After(value.ExpiresAt) {
+		return httpx.Principal{}, false
+	}
+	return value.Principal, true
+}
+
+func newOpaqueToken() (string, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw[:]), nil
 }
 
 // pathID 从 Gin 路径参数中提取名为 name 的整数值（int64），解析失败时返回 0。
@@ -860,6 +1400,145 @@ func pathID(c *gin.Context, name string) int64 {
 		return 0
 	}
 	return id
+}
+
+func filterAssets(assets []domain.AssetWithPlatform, c *gin.Context) []domain.AssetWithPlatform {
+	query := strings.ToLower(strings.TrimSpace(firstQuery(c, "q", "search")))
+	platformType := strings.ToLower(strings.TrimSpace(firstQuery(c, "platform_type", "protocol")))
+	status := strings.ToLower(strings.TrimSpace(firstQuery(c, "status", "is_active")))
+	if query == "" && platformType == "" && status == "" {
+		return assets
+	}
+	filtered := assets[:0]
+	for _, asset := range assets {
+		if query != "" {
+			name := strings.ToLower(asset.Name)
+			address := strings.ToLower(asset.Address)
+			if !strings.Contains(name, query) && !strings.Contains(address, query) {
+				continue
+			}
+		}
+		if platformType != "" && strings.ToLower(asset.PlatformType) != platformType {
+			continue
+		}
+		if status != "" && status != "all" {
+			wantActive := status == "active" || status == "true" || status == "1"
+			wantInactive := status == "inactive" || status == "false" || status == "0"
+			if (wantActive || wantInactive) && asset.IsActive != wantActive {
+				continue
+			}
+		}
+		filtered = append(filtered, asset)
+	}
+	return filtered
+}
+
+func filterSessions(sessions []domain.Session, c *gin.Context) []domain.Session {
+	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
+	query := strings.ToLower(strings.TrimSpace(firstQuery(c, "q", "search")))
+	userID := queryInt64OrZero(c.Query("user_id"))
+	assetID := queryInt64OrZero(c.Query("asset_id"))
+	from := queryTime(c.Query("date_from"), false)
+	to := queryTime(c.Query("date_to"), true)
+	if status == "" && query == "" && userID == 0 && assetID == 0 && from == nil && to == nil {
+		return sessions
+	}
+	filtered := sessions[:0]
+	for _, session := range sessions {
+		if status == "active" && session.IsFinished {
+			continue
+		}
+		if status == "ended" && !session.IsFinished {
+			continue
+		}
+		if userID != 0 && session.UserID != userID {
+			continue
+		}
+		if assetID != 0 && session.AssetID != assetID {
+			continue
+		}
+		if query != "" {
+			haystack := strings.ToLower(strings.Join([]string{
+				strconv.FormatInt(session.UserID, 10),
+				strconv.FormatInt(session.AssetID, 10),
+				strconv.FormatInt(session.AccountID, 10),
+				session.Protocol,
+				session.Type,
+				session.LoginFrom,
+				session.RemoteAddr,
+			}, " "))
+			if !strings.Contains(haystack, query) {
+				continue
+			}
+		}
+		if from != nil && session.DateStart.Before(*from) {
+			continue
+		}
+		if to != nil && session.DateStart.After(*to) {
+			continue
+		}
+		filtered = append(filtered, session)
+	}
+	return filtered
+}
+
+func firstQuery(c *gin.Context, keys ...string) string {
+	for _, key := range keys {
+		if value := c.Query(key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func queryPagination(c *gin.Context, defaultPage, defaultPerPage, maxPerPage int) (int, int) {
+	page := queryIntOrDefault(c.Query("page"), defaultPage)
+	perPage := queryIntOrDefault(c.Query("per_page"), defaultPerPage)
+	if page < 1 {
+		page = defaultPage
+	}
+	if perPage < 1 {
+		perPage = defaultPerPage
+	}
+	if perPage > maxPerPage {
+		perPage = maxPerPage
+	}
+	return page, perPage
+}
+
+func queryIntOrDefault(raw string, fallback int) int {
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+func queryInt64OrZero(raw string) int64 {
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
+func queryTime(raw string, endOfDay bool) *time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			if layout == "2006-01-02" {
+				parsed = parsed.UTC()
+				if endOfDay {
+					parsed = parsed.Add(24*time.Hour - time.Nanosecond)
+				}
+			}
+			return &parsed
+		}
+	}
+	return nil
 }
 
 // bindSDKURLInput 根据 HTTP 请求方法绑定 SDK URL 输入参数，支持 GET 和 POST 两种方式。
@@ -909,11 +1588,12 @@ func queryInt64(c *gin.Context, raw string) (int64, bool) {
 
 // requestProxyHost 从 HTTP 请求中解析代理主机地址，按优先级依次尝试多种来源。
 // 解析链路：
-//   1. X-Forwarded-Host 请求头：优先使用反向代理传递的原始主机名
-//   2. Request.Host：HTTP Host 头，作为回退值
-//   3. 若值为逗号分隔的多主机列表（多级代理场景），取第一个值
-//   4. 通过 net.SplitHostPort 剥离端口号，仅保留主机名部分
-//   5. 移除 IPv6 地址两端的方括号（如 [::1] → ::1）
+//  1. X-Forwarded-Host 请求头：优先使用反向代理传递的原始主机名
+//  2. Request.Host：HTTP Host 头，作为回退值
+//  3. 若值为逗号分隔的多主机列表（多级代理场景），取第一个值
+//  4. 通过 net.SplitHostPort 剥离端口号，仅保留主机名部分
+//  5. 移除 IPv6 地址两端的方括号（如 [::1] → ::1）
+//
 // 返回值不含端口号的纯主机名或 IP 地址
 func requestProxyHost(c *gin.Context) string {
 	host := strings.TrimSpace(c.GetHeader("X-Forwarded-Host"))

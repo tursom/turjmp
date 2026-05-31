@@ -37,7 +37,7 @@ type VerifyTokenResult struct {
 	Asset   domain.Asset           `json:"asset"`
 	Account map[string]any         `json:"account"`
 	// Target 连接目标信息，包含资产地址、协议端口和协议类型，供代理组件建立连接使用
-	Target  VerifyTokenTarget      `json:"target"`
+	Target VerifyTokenTarget `json:"target"`
 }
 
 // VerifyTokenTarget 连接目标信息，描述验证通过后代理应该连接到哪里
@@ -59,6 +59,9 @@ func (s *TokenService) Issue(userID int64, input IssueTokenInput) (domain.Connec
 	}
 	if input.Protocol == "" {
 		input.Protocol = "ssh"
+	}
+	if _, err := s.store.GetAssetAccount(input.AssetID, input.AccountID); err != nil {
+		return domain.ConnectionToken{}, err
 	}
 	ok, err := s.store.HasAssetPermission(userID, input.AssetID, input.AccountID, "connect")
 	if err != nil {

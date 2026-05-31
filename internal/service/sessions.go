@@ -69,3 +69,8 @@ func (s *SessionService) Update(id int64, finished bool, recordingPath string) (
 	}
 	return sess, s.store.UpdateSession(&sess)
 }
+
+// ForceFinish 标记活跃会话为已结束，用于管理员在控制台强制结束会话。
+func (s *SessionService) ForceFinish(id int64) (domain.Session, error) {
+	return s.Update(id, true, "")
+}

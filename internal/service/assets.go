@@ -13,6 +13,16 @@ type AssetService struct {
 	box   *crypto.SecretBox
 }
 
+// AssetInput 创建资产的输入参数。IsActive 使用指针区分未传值和显式 false。
+type AssetInput struct {
+	Name       string `json:"name"`
+	Address    string `json:"address"`
+	PlatformID int64  `json:"platform_id"`
+	NodeID     *int64 `json:"node_id"`
+	Comment    string `json:"comment"`
+	IsActive   *bool  `json:"is_active"`
+}
+
 // AccountInput 创建或更新账户的输入参数，包含账户名称、用户名、凭据（密码/私钥）、凭据类型、SSH 密钥类型、凭据短语、SU 提权配置和数据库名。
 type AccountInput struct {
 	Name        string `json:"name"`
@@ -49,9 +59,18 @@ func (s *AssetService) GetAsset(id int64) (domain.Asset, error) {
 }
 
 // CreateAsset 创建新资产。若未指定激活状态则默认设为激活（true）。
-func (s *AssetService) CreateAsset(a domain.Asset) (domain.Asset, error) {
-	if !a.IsActive {
-		a.IsActive = true
+func (s *AssetService) CreateAsset(input AssetInput) (domain.Asset, error) {
+	active := true
+	if input.IsActive != nil {
+		active = *input.IsActive
+	}
+	a := domain.Asset{
+		Name:       input.Name,
+		Address:    input.Address,
+		PlatformID: input.PlatformID,
+		NodeID:     input.NodeID,
+		Comment:    input.Comment,
+		IsActive:   active,
 	}
 	return a, s.store.CreateAsset(&a)
 }

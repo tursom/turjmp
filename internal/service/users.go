@@ -58,7 +58,7 @@ func (s *UserService) Get(id int64) (domain.User, []domain.Role, error) {
 // Create 创建新用户。流程：校验密码长度 → 使用 argon2id 哈希明文密码 → 设置默认激活状态 → 创建用户记录 → 若传入了角色 ID 列表则绑定角色。
 // 密码长度不足时返回 domain.ErrInvalidArgument。
 func (s *UserService) Create(input CreateUserInput) (domain.User, error) {
-	if len(input.Password) < s.passwordMinLength {
+	if len(input.Password) < s.effectivePasswordMinLength() {
 		return domain.User{}, domain.ErrInvalidArgument
 	}
 	hash, err := auth.HashPassword(input.Password)
@@ -103,7 +103,7 @@ func (s *UserService) Update(id int64, input UpdateUserInput) (domain.User, erro
 		user.IsActive = *input.IsActive
 	}
 	if input.Password != "" {
-		if len(input.Password) < s.passwordMinLength {
+		if len(input.Password) < s.effectivePasswordMinLength() {
 			return domain.User{}, domain.ErrInvalidArgument
 		}
 		hash, err := auth.HashPassword(input.Password)
@@ -115,12 +115,25 @@ func (s *UserService) Update(id int64, input UpdateUserInput) (domain.User, erro
 	if err := s.store.UpdateUser(&user); err != nil {
 		return domain.User{}, err
 	}
+	if input.IsActive != nil && !*input.IsActive {
+		if err := s.store.RevokeUserRefreshTokens(user.ID); err != nil {
+			return domain.User{}, err
+		}
+	}
 	if input.RoleIDs != nil {
 		if err := s.store.SetUserRoles(user.ID, input.RoleIDs); err != nil {
 			return domain.User{}, err
 		}
 	}
 	return user, nil
+}
+
+func (s *UserService) effectivePasswordMinLength() int {
+	minLength := settingInt(s.store, "security.password_min_length", s.passwordMinLength)
+	if minLength <= 0 {
+		return s.passwordMinLength
+	}
+	return minLength
 }
 
 // Delete 删除指定用户。内置保护措施：禁止删除 ID 为 1 的用户（系统引导管理员），确保总有一个超级管理员账户存在。

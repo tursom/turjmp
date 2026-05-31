@@ -116,6 +116,12 @@ func (t *WebTerminal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer sshSession.Close()
+	stopWatch := watchSessionFinish(ctx, t.api, session.SessionID, func() {
+		_ = sshSession.Close()
+		_ = client.Close()
+		_ = conn.Close(websocket.StatusNormalClosure, "session force finished")
+	})
+	defer stopWatch()
 	// 请求伪终端（使用 xterm-256color，初始大小 80x24）
 	if err := sshSession.RequestPty("xterm-256color", 24, 80, gossh.TerminalModes{}); err != nil {
 		_ = conn.Close(websocket.StatusInternalError, err.Error())

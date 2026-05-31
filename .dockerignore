@@ -1,0 +1,15 @@
+bin/
+.turjmp/
+*.db
+*.db-shm
+*.db-wal
+recordings/
+turjmp
+web/node_modules/
+web/dist/
+web/.vite/
+.git/
+.codex/
+.agents/
+.omc/
+.sisyphus/

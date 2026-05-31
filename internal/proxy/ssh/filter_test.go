@@ -62,6 +62,9 @@ func (s staticRuleAPI) VerifyConnectionToken(context.Context, string, string) (t
 func (s staticRuleAPI) CreateSession(context.Context, targetSessionInfo) (targetSessionInfo, error) {
 	return targetSessionInfo{}, nil
 }
+func (s staticRuleAPI) GetSession(context.Context, int64) (targetSessionInfo, error) {
+	return targetSessionInfo{}, nil
+}
 func (s staticRuleAPI) FinishSession(context.Context, int64, string) error { return nil }
 func (s staticRuleAPI) ListCommandFilterACLs(context.Context) ([]commandFilterRule, error) {
 	return s.rules, nil

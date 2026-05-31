@@ -122,6 +122,37 @@ func (c *APIClient) CreateSession(ctx context.Context, session targetSessionInfo
 	return session, nil
 }
 
+// GetSession 查询会话当前状态，代理用它感知管理端强制断开操作。
+func (c *APIClient) GetSession(ctx context.Context, sessionID int64) (targetSessionInfo, error) {
+	var out struct {
+		ID            int64  `json:"id"`
+		UserID        int64  `json:"user_id"`
+		AssetID       int64  `json:"asset_id"`
+		AccountID     int64  `json:"account_id"`
+		Protocol      string `json:"protocol"`
+		Type          string `json:"type"`
+		LoginFrom     string `json:"login_from"`
+		RemoteAddr    string `json:"remote_addr"`
+		RecordingPath string `json:"recording_path"`
+		IsFinished    bool   `json:"is_finished"`
+	}
+	if err := c.get(ctx, fmt.Sprintf("/api/v1/proxy/sessions/%d", sessionID), &out); err != nil {
+		return targetSessionInfo{}, err
+	}
+	return targetSessionInfo{
+		UserID:        out.UserID,
+		AssetID:       out.AssetID,
+		AccountID:     out.AccountID,
+		Protocol:      out.Protocol,
+		Type:          out.Type,
+		ConnectMethod: out.LoginFrom,
+		RemoteAddr:    out.RemoteAddr,
+		RecordingPath: out.RecordingPath,
+		SessionID:     out.ID,
+		IsFinished:    out.IsFinished,
+	}, nil
+}
+
 // FinishSession 标记会话已完成并记录录像文件路径。
 // 参数 ctx 是上下文，sessionID 是会话 ID，recordingPath 是录像文件路径。
 // 返回 nil 表示成功，否则返回错误。

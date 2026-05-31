@@ -48,6 +48,7 @@ type targetSessionInfo struct {
 	RemoteAddr    string // 用户远程地址
 	RecordingPath string // 录像文件路径
 	SessionID     int64  // API 服务器返回的会话 ID
+	IsFinished    bool   // API 服务器记录的会话结束状态
 }
 
 // targetAuthResult 封装连接令牌验证的完整结果。
@@ -67,6 +68,8 @@ type apiClient interface {
 	VerifyConnectionToken(ctx context.Context, token, remoteAddr string) (targetAuthResult, error)
 	// CreateSession 在 API 服务器上创建新的会话记录
 	CreateSession(ctx context.Context, session targetSessionInfo) (targetSessionInfo, error)
+	// GetSession 从 API 服务器查询会话当前状态
+	GetSession(ctx context.Context, sessionID int64) (targetSessionInfo, error)
 	// FinishSession 标记会话结束并保存录像路径
 	FinishSession(ctx context.Context, sessionID int64, recordingPath string) error
 	// ListCommandFilterACLs 获取命令过滤规则列表

@@ -4,6 +4,9 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -57,6 +60,7 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	v1.POST("/authentication/super-connection-tokens/verify/", h.VerifyConnectionToken)
 	// Proxy API 路由组：供内部 SSH 代理组件调用的接口，认证方式为 X-Proxy-Auth 请求头（共享密钥 + IP 白名单）
 	v1.POST("/proxy/sessions", h.ProxyCreateSession)
+	v1.GET("/proxy/sessions/:id", h.ProxyGetSession)
 	v1.PATCH("/proxy/sessions/:id", h.ProxyUpdateSession)
 	v1.GET("/proxy/ssh/host-keys", h.ProxyHostKeys)
 	v1.GET("/proxy/settings/:key", h.ProxyGetSetting)
@@ -65,6 +69,7 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 
 	// authOnly：仅需 JWT 认证的路由组（无需 RBAC），用于登出和 MFA 操作
 	authOnly := v1.Group("/auth", middleware.Auth(h.Auth))
+	authOnly.GET("/access", h.Access)
 	authOnly.POST("/logout", h.Logout)
 	authOnly.POST("/mfa/setup", h.MFASetup)
 	authOnly.POST("/mfa/verify", h.MFAVerify)
@@ -83,8 +88,11 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	secure.PUT("/roles/:id", h.UpdateRole)
 	secure.DELETE("/roles/:id", h.DeleteRole)
 	secure.POST("/roles/:id/permissions", h.SetRolePermissions)
+	secure.GET("/user-groups", h.ListUserGroups)
 
 	secure.GET("/platforms", h.ListPlatforms)
+	secure.POST("/platforms", h.CreatePlatform)
+	secure.GET("/platforms/:id/protocols", h.ListPlatformProtocols)
 	secure.GET("/assets/tree", h.AssetTree)
 	secure.GET("/assets", h.ListAssets)
 	secure.POST("/assets", h.CreateAsset)
@@ -109,10 +117,15 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	// POST：参数通过 JSON 请求体传递，支持更丰富的连接配置
 	secure.GET("/authentication/connection-tokens/sdk-url", h.SDKConnectionToken)
 	secure.POST("/authentication/connection-tokens/sdk-url", h.SDKConnectionToken)
+	secure.GET("/dashboard/summary", h.DashboardSummary)
 	secure.GET("/sessions", h.ListSessions)
+	secure.POST("/sessions/stream-token", h.IssueSessionStreamToken)
+	v1.GET("/sessions/stream", h.StreamSessions)
 	secure.POST("/sessions", h.CreateSession)
 	secure.GET("/sessions/:id", h.GetSession)
-	secure.PATCH("/sessions/:id", h.UpdateSession)
+	secure.GET("/sessions/:id/recording", h.SessionRecording)
+	secure.POST("/sessions/:id/force-finish", h.ForceFinishSession)
+	secure.GET("/sessions/:id/commands", h.ListSessionCommands)
 
 	secure.GET("/settings", h.ListSettings)
 	// SSH 主机密钥指纹（公钥摘要）查询接口，需 JWT + RBAC 认证
@@ -120,7 +133,64 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	secure.GET("/settings/:key", h.GetSetting)
 	secure.PUT("/settings/:key", h.UpdateSetting)
 	secure.GET("/audit-logs", h.ListAuditLogs)
+
+	mountWebUI(r, log)
 	return r
+}
+
+// mountWebUI serves the built Vue SPA when a web/dist directory is available.
+func mountWebUI(r *gin.Engine, log *zap.Logger) {
+	distDir, ok := webDistDir()
+	if !ok {
+		log.Debug("web_ui_dist_not_found")
+		return
+	}
+	indexPath := filepath.Join(distDir, "index.html")
+	r.NoRoute(func(c *gin.Context) {
+		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/ws/") || path == "/metrics" || strings.HasPrefix(path, "/health") {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		cleaned := filepath.Clean(strings.TrimPrefix(path, "/"))
+		if cleaned == "." {
+			c.File(indexPath)
+			return
+		}
+		filePath := filepath.Join(distDir, cleaned)
+		if !strings.HasPrefix(filePath, distDir+string(os.PathSeparator)) && filePath != distDir {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+			c.File(filePath)
+			return
+		}
+		c.File(indexPath)
+	})
+	log.Info("web_ui_enabled", zap.String("dir", distDir))
+}
+
+func webDistDir() (string, bool) {
+	candidates := []string{}
+	if configured := strings.TrimSpace(os.Getenv("TURJMP_WEB_DIST")); configured != "" {
+		candidates = append(candidates, configured)
+	}
+	candidates = append(candidates, "web/dist", "/usr/share/turjmp/web")
+	for _, candidate := range candidates {
+		abs, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(abs, "index.html")); err == nil && !info.IsDir() {
+			return abs, true
+		}
+	}
+	return "", false
 }
 
 // requestLogger 是 HTTP 请求日志中间件，使用 zap 记录每个请求的方法、路径、状态码和客户端 IP。

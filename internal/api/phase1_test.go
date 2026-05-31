@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/casbin/casbin/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/pressly/goose/v3"
 	"go.uber.org/zap"
@@ -79,6 +81,72 @@ func TestPhase1RouterHealthAuthAndRBAC(t *testing.T) {
 	}
 }
 
+func TestPhase1UpdateRoleRenamesCasbinPolicies(t *testing.T) {
+	env := newPhase1APITestEnv(t)
+	adminToken := phase1Login(t, env.router, "admin", "admin123")
+	adminHeader := phase1AuthHeader(adminToken)
+
+	role, err := env.store.UpsertRole("ops_temp", "temporary operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.enforcer.AddPolicy("ops_temp", "/api/v1/assets", "GET|POST"); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.enforcer.SavePolicy(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := phase1Request(t, env.router, http.MethodPut, fmt.Sprintf("/api/v1/roles/%d", role.ID), gin.H{
+		"name":        "ops_renamed",
+		"description": "renamed operator",
+	}, adminHeader)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("update role status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if policies, err := env.enforcer.GetFilteredPolicy(0, "ops_temp"); err != nil {
+		t.Fatal(err)
+	} else if len(policies) != 0 {
+		t.Fatalf("old role policies should be removed: %#v", policies)
+	}
+	policies, err := env.enforcer.GetFilteredPolicy(0, "ops_renamed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(policies) != 1 || policies[0][1] != "/api/v1/assets" || policies[0][2] != "GET|POST" {
+		t.Fatalf("renamed role policies not preserved: %#v", policies)
+	}
+}
+
+func TestPhase1DeleteRoleClearsCasbinPolicies(t *testing.T) {
+	env := newPhase1APITestEnv(t)
+	adminToken := phase1Login(t, env.router, "admin", "admin123")
+	adminHeader := phase1AuthHeader(adminToken)
+
+	role, err := env.store.UpsertRole("delete_temp", "temporary role")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.enforcer.AddPolicy("delete_temp", "/api/v1/assets", "GET"); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.enforcer.SavePolicy(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := phase1Request(t, env.router, http.MethodDelete, fmt.Sprintf("/api/v1/roles/%d", role.ID), nil, adminHeader)
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("delete role status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	policies, err := env.enforcer.GetFilteredPolicy(0, "delete_temp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(policies) != 0 {
+		t.Fatalf("deleted role policies should be removed: %#v", policies)
+	}
+}
+
 func TestPhase1RouterAssetsPermissionsTokensSettingsAndSessions(t *testing.T) {
 	env := newPhase1APITestEnv(t)
 	adminToken := phase1Login(t, env.router, "admin", "admin123")
@@ -116,11 +184,12 @@ func TestPhase1RouterAssetsPermissionsTokensSettingsAndSessions(t *testing.T) {
 		t.Fatalf("unexpected fingerprints: %#v", fpList)
 	}
 
-	assetResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/assets", domain.Asset{
+	active := true
+	assetResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/assets", service.AssetInput{
 		Name:       "phase1-linux",
 		Address:    "10.0.0.10",
 		PlatformID: phase1LinuxPlatformID(t, env.store),
-		IsActive:   true,
+		IsActive:   &active,
 	}, adminHeader)
 	if assetResp.Code != http.StatusCreated {
 		t.Fatalf("create asset status=%d body=%s", assetResp.Code, assetResp.Body.String())
@@ -128,6 +197,20 @@ func TestPhase1RouterAssetsPermissionsTokensSettingsAndSessions(t *testing.T) {
 	asset := phase1DecodeData[domain.Asset](t, assetResp)
 	if asset.ID == 0 || asset.Address != "10.0.0.10" {
 		t.Fatalf("unexpected asset: %#v", asset)
+	}
+	inactive := false
+	inactiveResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/assets", service.AssetInput{
+		Name:       "phase1-inactive",
+		Address:    "10.0.0.11",
+		PlatformID: phase1LinuxPlatformID(t, env.store),
+		IsActive:   &inactive,
+	}, adminHeader)
+	if inactiveResp.Code != http.StatusCreated {
+		t.Fatalf("create inactive asset status=%d body=%s", inactiveResp.Code, inactiveResp.Body.String())
+	}
+	inactiveAsset := phase1DecodeData[domain.Asset](t, inactiveResp)
+	if inactiveAsset.IsActive {
+		t.Fatalf("inactive asset should preserve explicit false: %#v", inactiveAsset)
 	}
 
 	accountResp := phase1Request(t, env.router, http.MethodPost, fmt.Sprintf("/api/v1/assets/%d/accounts", asset.ID), service.AccountInput{
@@ -163,6 +246,14 @@ func TestPhase1RouterAssetsPermissionsTokensSettingsAndSessions(t *testing.T) {
 	}
 	if _, ok := tree["assets"]; !ok {
 		t.Fatalf("asset tree missing assets: %#v", tree)
+	}
+	protocolsResp := phase1Request(t, env.router, http.MethodGet, fmt.Sprintf("/api/v1/platforms/%d/protocols", asset.PlatformID), nil, adminHeader)
+	if protocolsResp.Code != http.StatusOK {
+		t.Fatalf("platform protocols status=%d body=%s", protocolsResp.Code, protocolsResp.Body.String())
+	}
+	protocols := phase1DecodeData[[]domain.PlatformProtocol](t, protocolsResp)
+	if len(protocols) == 0 || protocols[0].Name == "" || protocols[0].Port == 0 {
+		t.Fatalf("unexpected platform protocols: %#v", protocols)
 	}
 
 	permResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/permissions", service.PermissionInput{
@@ -262,16 +353,148 @@ func TestPhase1RouterAssetsPermissionsTokensSettingsAndSessions(t *testing.T) {
 	if session.Type != "normal" || session.LoginFrom != "WT" {
 		t.Fatalf("unexpected session defaults: %#v", session)
 	}
-	finishResp := phase1Request(t, env.router, http.MethodPatch, fmt.Sprintf("/api/v1/sessions/%d", session.ID), gin.H{
-		"is_finished":    true,
-		"recording_path": "recordings/phase1.cast",
+	dashboardResp := phase1Request(t, env.router, http.MethodGet, "/api/v1/dashboard/summary", nil, adminHeader)
+	if dashboardResp.Code != http.StatusOK {
+		t.Fatalf("dashboard summary status=%d body=%s", dashboardResp.Code, dashboardResp.Body.String())
+	}
+	dashboard := phase1DecodeData[struct {
+		TotalAssets    int              `json:"total_assets"`
+		ActiveSessions int              `json:"active_sessions"`
+		TodaySessions  int              `json:"today_sessions"`
+		ActiveUsers    int              `json:"active_users"`
+		RecentSessions []domain.Session `json:"recent_sessions"`
+	}](t, dashboardResp)
+	if dashboard.TotalAssets < 2 || dashboard.ActiveSessions != 1 || dashboard.TodaySessions == 0 || dashboard.ActiveUsers != 1 || len(dashboard.RecentSessions) == 0 {
+		t.Fatalf("unexpected dashboard summary: %#v", dashboard)
+	}
+	streamTokenResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/sessions/stream-token", nil, adminHeader)
+	if streamTokenResp.Code != http.StatusCreated {
+		t.Fatalf("stream token status=%d body=%s", streamTokenResp.Code, streamTokenResp.Body.String())
+	}
+	streamToken := phase1DecodeData[struct {
+		Token     string `json:"token"`
+		ExpiresIn int    `json:"expires_in"`
+	}](t, streamTokenResp)
+	if streamToken.Token == "" || streamToken.ExpiresIn != 60 {
+		t.Fatalf("unexpected stream token: %#v", streamToken)
+	}
+	legacyStreamAuth := phase1Request(t, env.router, http.MethodGet, "/api/v1/sessions/stream?access_token="+adminToken, nil, nil)
+	if legacyStreamAuth.Code != http.StatusUnauthorized {
+		t.Fatalf("stream should reject JWT query token status=%d body=%s", legacyStreamAuth.Code, legacyStreamAuth.Body.String())
+	}
+	tokenOnlyRole, err := env.store.UpsertRole("stream_token_only", "can mint stream token but cannot read sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.enforcer.AddPolicy("stream_token_only", "/api/v1/sessions/stream-token", "POST"); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.enforcer.SavePolicy(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.NewUserService(env.store, 8).Create(service.CreateUserInput{
+		Username: "streamer",
+		Name:     "Stream Token Only",
+		Password: "streamer123",
+		RoleIDs:  []int64{tokenOnlyRole.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	streamerToken := phase1Login(t, env.router, "streamer", "streamer123")
+	streamerStreamTokenResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/sessions/stream-token", nil, phase1AuthHeader(streamerToken))
+	if streamerStreamTokenResp.Code != http.StatusCreated {
+		t.Fatalf("stream-token-only mint status=%d body=%s", streamerStreamTokenResp.Code, streamerStreamTokenResp.Body.String())
+	}
+	streamerStreamToken := phase1DecodeData[struct {
+		Token string `json:"token"`
+	}](t, streamerStreamTokenResp)
+	forbiddenStream := phase1Request(t, env.router, http.MethodGet, "/api/v1/sessions/stream?stream_token="+streamerStreamToken.Token, nil, nil)
+	if forbiddenStream.Code != http.StatusForbidden {
+		t.Fatalf("stream token must still enforce sessions read permission, status=%d body=%s", forbiddenStream.Code, forbiddenStream.Body.String())
+	}
+	adminFinishResp := phase1Request(t, env.router, http.MethodPatch, fmt.Sprintf("/api/v1/sessions/%d", session.ID), gin.H{
+		"is_finished": true,
 	}, adminHeader)
+	if adminFinishResp.Code != http.StatusNotFound {
+		t.Fatalf("admin finish session status=%d body=%s", adminFinishResp.Code, adminFinishResp.Body.String())
+	}
+	recordingPath := filepath.Join(t.TempDir(), "phase1.cast")
+	recordingDir := filepath.Dir(recordingPath)
+	localRecordingSetting, err := env.store.GetSetting("recording.local.path")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localRecordingSetting.Value = fmt.Sprintf("%q", recordingDir)
+	if err := env.store.UpsertSetting(localRecordingSetting); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(recordingPath, []byte(`{"version":2}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finishResp := phase1Request(t, env.router, http.MethodPatch, fmt.Sprintf("/api/v1/proxy/sessions/%d", session.ID), gin.H{
+		"is_finished":    true,
+		"recording_path": recordingPath,
+	}, phase1ProxyHeader(env.cfg.ProxyAuth.Secret))
 	if finishResp.Code != http.StatusOK {
 		t.Fatalf("finish session status=%d body=%s", finishResp.Code, finishResp.Body.String())
 	}
 	finished := phase1DecodeData[domain.Session](t, finishResp)
-	if !finished.IsFinished || finished.DateEnd == nil || finished.RecordingPath != "recordings/phase1.cast" {
+	if !finished.IsFinished || finished.DateEnd == nil || finished.RecordingPath != recordingPath {
 		t.Fatalf("session not finished: %#v", finished)
+	}
+	recordingResp := phase1Request(t, env.router, http.MethodGet, fmt.Sprintf("/api/v1/sessions/%d/recording", session.ID), nil, adminHeader)
+	if recordingResp.Code != http.StatusOK {
+		t.Fatalf("session recording status=%d body=%s", recordingResp.Code, recordingResp.Body.String())
+	}
+	recording := phase1DecodeData[struct {
+		RecordingPath string `json:"recording_path"`
+		DownloadURL   string `json:"download_url"`
+		Available     bool   `json:"available"`
+	}](t, recordingResp)
+	if !recording.Available || recording.RecordingPath != recordingPath || !strings.Contains(recording.DownloadURL, "/recording?download=1") {
+		t.Fatalf("unexpected recording metadata: %#v", recording)
+	}
+	downloadResp := phase1Request(t, env.router, http.MethodGet, fmt.Sprintf("/api/v1/sessions/%d/recording?download=1", session.ID), nil, adminHeader)
+	if downloadResp.Code != http.StatusOK || !strings.Contains(downloadResp.Body.String(), `"version":2`) {
+		t.Fatalf("recording download status=%d body=%s", downloadResp.Code, downloadResp.Body.String())
+	}
+
+	commandDetail := fmt.Sprintf(`{"session_id":%d,"sql":"select 1","rows_affected":1}`, session.ID)
+	if err := env.store.Audit(&session.UserID, "db.query", "mysql", "127.0.0.1", commandDetail); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 600; i++ {
+		noiseDetail := fmt.Sprintf(`{"session_id":%d,"sql":"select %d"}`, session.ID+1000, i)
+		if err := env.store.Audit(&session.UserID, "db.query", "mysql", "127.0.0.1", noiseDetail); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commandsResp := phase1Request(t, env.router, http.MethodGet, fmt.Sprintf("/api/v1/sessions/%d/commands", session.ID), nil, adminHeader)
+	if commandsResp.Code != http.StatusOK {
+		t.Fatalf("session commands status=%d body=%s", commandsResp.Code, commandsResp.Body.String())
+	}
+	commands := phase1DecodeData[[]domain.AuditLog](t, commandsResp)
+	if len(commands) != 1 || commands[0].Detail != commandDetail {
+		t.Fatalf("unexpected session commands: %#v", commands)
+	}
+	auditResp := phase1Request(t, env.router, http.MethodGet, fmt.Sprintf("/api/v1/audit-logs?search=select%%201&user_id=%d", session.UserID), nil, adminHeader)
+	if auditResp.Code != http.StatusOK {
+		t.Fatalf("audit logs status=%d body=%s", auditResp.Code, auditResp.Body.String())
+	}
+	auditPage := phase1DecodeData[struct {
+		Items []domain.AuditLog `json:"items"`
+		Total int               `json:"total"`
+	}](t, auditResp)
+	if auditPage.Total == 0 || len(auditPage.Items) == 0 {
+		t.Fatalf("expected filtered audit logs, got %#v", auditPage)
+	}
+	forceResp := phase1Request(t, env.router, http.MethodPost, fmt.Sprintf("/api/v1/sessions/%d/force-finish", session.ID), nil, adminHeader)
+	if forceResp.Code != http.StatusOK {
+		t.Fatalf("force finish session status=%d body=%s", forceResp.Code, forceResp.Body.String())
+	}
+	forced := phase1DecodeData[domain.Session](t, forceResp)
+	if !forced.IsFinished || forced.DateEnd == nil {
+		t.Fatalf("session not force finished: %#v", forced)
 	}
 }
 
@@ -311,9 +534,10 @@ func TestPhase1ProxyEndpointsRequireProxyAuth(t *testing.T) {
 }
 
 type phase1APITestEnv struct {
-	router http.Handler
-	store  *repository.Store
-	cfg    config.Config
+	router   http.Handler
+	store    *repository.Store
+	cfg      config.Config
+	enforcer *casbin.Enforcer
 }
 
 func newPhase1APITestEnv(t *testing.T) phase1APITestEnv {
@@ -386,7 +610,7 @@ func newPhase1APITestEnv(t *testing.T) phase1APITestEnv {
 		Store:       store,
 		Enforcer:    enforcer,
 	}
-	return phase1APITestEnv{router: NewRouter(cfg, zap.NewNop(), db, h), store: store, cfg: cfg}
+	return phase1APITestEnv{router: NewRouter(cfg, zap.NewNop(), db, h), store: store, cfg: cfg, enforcer: enforcer}
 }
 
 func phase1Login(t *testing.T, router http.Handler, username, password string) string {

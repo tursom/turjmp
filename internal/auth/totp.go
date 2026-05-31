@@ -34,6 +34,11 @@ func GenerateTOTP(issuer, accountName string) (TOTPSetup, error) {
 		return TOTPSetup{}, err
 	}
 	secret := strings.TrimRight(base32.StdEncoding.EncodeToString(secretBytes), "=")
+	return BuildTOTPSetup(issuer, accountName, secret), nil
+}
+
+// BuildTOTPSetup builds the provisioning payload for an existing TOTP secret.
+func BuildTOTPSetup(issuer, accountName, secret string) TOTPSetup {
 	label := url.PathEscape(issuer + ":" + accountName)
 	q := url.Values{}
 	q.Set("secret", secret)
@@ -41,7 +46,7 @@ func GenerateTOTP(issuer, accountName string) (TOTPSetup, error) {
 	q.Set("algorithm", "SHA1")
 	q.Set("digits", "6")
 	q.Set("period", "30")
-	return TOTPSetup{Secret: secret, URL: "otpauth://totp/" + label + "?" + q.Encode()}, nil
+	return TOTPSetup{Secret: secret, URL: "otpauth://totp/" + label + "?" + q.Encode()}
 }
 
 // ValidateTOTP 验证用户输入的 6 位 TOTP 验证码。

@@ -116,7 +116,7 @@ var defaultPlatforms = []struct {
 	{"PostgreSQL", "postgres", "PostgreSQL database", "postgres", 5432},
 }
 
-// DefaultSettings 返回系统所有的默认设置项，涵盖录制存储、代理连接限制、安全策略、SFTP 和通知等分类。
+// DefaultSettings 返回系统所有的默认设置项，覆盖管理控制台第一阶段暴露的主要配置分类。
 func DefaultSettings() []DefaultSetting {
 	return []DefaultSetting{
 		{"recording.storage", `"local"`, "recording", "Recording Storage", "Recording storage backend", "select", `["local","s3","oss","cos"]`},
@@ -125,17 +125,44 @@ func DefaultSettings() []DefaultSetting {
 		{"recording.s3.bucket", `"turjmp-sessions"`, "recording", "S3 Bucket", "S3 bucket name", "text", ""},
 		{"recording.s3.access_key", `""`, "recording", "S3 Access Key", "S3 access key", "secret", ""},
 		{"recording.s3.secret_key", `""`, "recording", "S3 Secret Key", "S3 secret key", "secret", ""},
+		{"recording.oss.endpoint", `""`, "recording", "OSS Endpoint", "OSS endpoint", "text", ""},
+		{"recording.oss.bucket", `""`, "recording", "OSS Bucket", "OSS bucket name", "text", ""},
+		{"recording.oss.access_key", `""`, "recording", "OSS Access Key", "OSS access key", "secret", ""},
+		{"recording.oss.secret_key", `""`, "recording", "OSS Secret Key", "OSS secret key", "secret", ""},
 		{"proxy.ssh.max_connections", `100`, "proxy", "SSH Max Connections", "Maximum concurrent SSH connections", "number", ""},
 		{"proxy.ssh.idle_timeout", `900`, "proxy", "SSH Idle Timeout", "SSH idle timeout in seconds", "number", ""},
 		{"proxy.db.max_connections", `50`, "proxy", "DB Max Connections", "Maximum concurrent DB proxy connections", "number", ""},
 		{"proxy.db.idle_timeout", `1800`, "proxy", "DB Idle Timeout", "DB idle timeout in seconds", "number", ""},
 		{"proxy.rdp.max_connections", `20`, "proxy", "RDP Max Connections", "Maximum concurrent RDP connections", "number", ""},
+		{"proxy.rdp.idle_timeout", `3600`, "proxy", "RDP Idle Timeout", "RDP idle timeout in seconds", "number", ""},
+		{"proxy.session.max_duration", `3600`, "proxy", "Session Max Duration", "Maximum session duration in seconds", "number", ""},
 		{"security.session_timeout", `3600`, "security", "Session Timeout", "Maximum session duration in seconds", "number", ""},
 		{"security.mfa_required", `false`, "security", "MFA Required", "Require MFA for all users", "toggle", ""},
 		{"security.password_min_length", `8`, "security", "Password Min Length", "Minimum password length", "number", ""},
+		{"security.login_failure_lock_enabled", `true`, "security", "Login Failure Lock", "Lock users after repeated login failures", "toggle", ""},
+		{"security.login_failure_threshold", `5`, "security", "Login Failure Threshold", "Failed login attempts before locking", "number", ""},
+		{"security.login_failure_lock_minutes", `15`, "security", "Login Failure Lock Minutes", "Lock duration after repeated failures", "number", ""},
 		{"sftp.max_file_size", `1073741824`, "sftp", "SFTP Max File Size", "Maximum SFTP file size", "number", ""},
 		{"sftp.deny_paths", `"/etc/shadow,/etc/passwd"`, "sftp", "SFTP Deny Paths", "Denied SFTP paths", "text", ""},
 		{"notification.smtp.host", `""`, "notification", "SMTP Host", "SMTP host", "text", ""},
+		{"notification.smtp.port", `587`, "notification", "SMTP Port", "SMTP server port", "number", ""},
+		{"notification.smtp.username", `""`, "notification", "SMTP Username", "SMTP username", "text", ""},
+		{"notification.smtp.password", `""`, "notification", "SMTP Password", "SMTP password", "secret", ""},
+		{"notification.smtp.from", `""`, "notification", "SMTP From", "Default sender address", "text", ""},
+		{"notification.email.template", `""`, "notification", "Email Template", "Default notification email template", "text", ""},
 		{"branding.site_name", `"Turjmp"`, "branding", "Site Name", "Visible site name", "text", ""},
+		{"branding.logo_url", `""`, "branding", "Logo URL", "Custom logo URL", "text", ""},
+		{"branding.theme_color", `"#2563eb"`, "branding", "Theme Color", "Primary theme color", "text", ""},
+		{"auth.ldap.enabled", `false`, "auth", "LDAP Enabled", "Enable LDAP authentication", "toggle", ""},
+		{"auth.ldap.url", `""`, "auth", "LDAP URL", "LDAP server URL", "text", ""},
+		{"auth.ldap.bind_dn", `""`, "auth", "LDAP Bind DN", "LDAP bind distinguished name", "text", ""},
+		{"auth.ldap.bind_password", `""`, "auth", "LDAP Bind Password", "LDAP bind password", "secret", ""},
+		{"auth.ldap.user_search_base", `""`, "auth", "LDAP User Search Base", "LDAP user search base DN", "text", ""},
+		{"auth.oauth.enabled", `false`, "auth", "OAuth Enabled", "Enable OAuth authentication", "toggle", ""},
+		{"auth.oauth.client_id", `""`, "auth", "OAuth Client ID", "OAuth client ID", "text", ""},
+		{"auth.oauth.client_secret", `""`, "auth", "OAuth Client Secret", "OAuth client secret", "secret", ""},
+		{"auth.oauth.auth_url", `""`, "auth", "OAuth Auth URL", "OAuth authorization endpoint", "text", ""},
+		{"auth.oauth.token_url", `""`, "auth", "OAuth Token URL", "OAuth token endpoint", "text", ""},
+		{"auth.oauth.scopes", `"openid,profile,email"`, "auth", "OAuth Scopes", "OAuth scopes, comma-separated", "text", ""},
 	}
 }

@@ -6,6 +6,7 @@ package sshproxy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -281,6 +282,12 @@ func handleSession(cfg config.Config, api *APIClient, dialer *sshDialer) gliders
 			return
 		}
 		defer remoteSession.Close()
+		stopWatch := watchSessionFinish(sess.Context(), api, session.SessionID, func() {
+			_ = remoteSession.Close()
+			_ = client.Close()
+			_ = sess.Close()
+		})
+		defer stopWatch()
 
 		// 如果用户请求了 PTY，在目标上分配伪终端
 		ptyReq, winCh, hasPty := sess.Pty()
@@ -318,6 +325,7 @@ func handleSession(cfg config.Config, api *APIClient, dialer *sshDialer) gliders
 		go func() { _, _ = io.Copy(errOutput, stderr) }()
 		// 如果有原始命令则执行命令，否则启动交互式 shell
 		if raw := sess.RawCommand(); raw != "" {
+			auditSSHCommand(sess.Context(), api, userID, session.SessionID, safeRemoteAddr(sess.RemoteAddr()), raw)
 			if err := remoteSession.Start(raw); err != nil {
 				_, _ = io.WriteString(sess, fmt.Sprintf("exec failed: %v\n", err))
 				_ = sess.Exit(1)
@@ -332,6 +340,17 @@ func handleSession(cfg config.Config, api *APIClient, dialer *sshDialer) gliders
 		_ = remoteSession.Wait()
 		_ = sess.Exit(0)
 	}
+}
+
+func auditSSHCommand(ctx context.Context, api apiClient, userID, sessionID int64, remoteAddr, command string) {
+	detail, err := json.Marshal(map[string]any{
+		"session_id": sessionID,
+		"command":    command,
+	})
+	if err != nil {
+		return
+	}
+	_ = api.Audit(ctx, userID, "ssh.command", "ssh", remoteAddr, string(detail))
 }
 
 // directTCPIPHandler 创建处理 SSH 端口转发（direct-tcpip）的通道处理器。
@@ -387,7 +406,12 @@ func directTCPIPHandler(cfg config.Config, api *APIClient, dialer *sshDialer) gl
 			RemoteAddr:    safeRemoteAddr(conn.RemoteAddr()),
 		})
 		if err == nil {
+			stopWatch := watchSessionFinish(ctx, api, session.SessionID, func() {
+				_ = ch.Close()
+				_ = targetConn.Close()
+			})
 			defer func() {
+				stopWatch()
 				_ = api.FinishSession(context.Background(), session.SessionID, "")
 			}()
 		}
@@ -464,11 +488,6 @@ func sftpSubsystemHandler(cfg config.Config, api *APIClient, dialer *sshDialer) 
 			ConnectMethod: "ssh_client",
 			RemoteAddr:    safeRemoteAddr(sess.RemoteAddr()),
 		})
-		if err == nil {
-			defer func() {
-				_ = api.FinishSession(context.Background(), session.SessionID, "")
-			}()
-		}
 		// 创建远程 SFTP 代理处理器，包含策略和审计回调
 		handlers := &remoteSFTPHandlers{
 			client: sftpClient,
@@ -485,6 +504,18 @@ func sftpSubsystemHandler(cfg config.Config, api *APIClient, dialer *sshDialer) 
 			FileList: handlers,
 		})
 		defer server.Close()
+		if err == nil {
+			stopWatch := watchSessionFinish(sess.Context(), api, session.SessionID, func() {
+				_ = server.Close()
+				_ = sftpClient.Close()
+				_ = client.Close()
+				_ = sess.Close()
+			})
+			defer func() {
+				stopWatch()
+				_ = api.FinishSession(context.Background(), session.SessionID, "")
+			}()
+		}
 		_ = cfg
 		_ = server.Serve()
 	}

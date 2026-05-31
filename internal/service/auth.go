@@ -19,14 +19,16 @@ type AuthService struct {
 	cfg   config.Config
 }
 
-// LoginResult 登录成功后返回的完整结果，包含访问令牌和刷新令牌及其过期时间、用户信息与角色列表，供前端存储并后续请求使用。
+// LoginResult 登录成功后返回令牌与身份信息；RequireMFA=true 表示用户名密码已通过但仍需 TOTP 验证码。
 type LoginResult struct {
-	AccessToken           string      `json:"access_token"`
-	AccessTokenExpiresAt  time.Time   `json:"access_token_expires_at"`
-	RefreshToken          string      `json:"refresh_token"`
-	RefreshTokenExpiresAt time.Time   `json:"refresh_token_expires_at"`
-	User                  domain.User `json:"user"`
-	Roles                 []string    `json:"roles"`
+	RequireMFA            bool        `json:"require_mfa,omitempty"`
+	RequireMFASetup       bool        `json:"require_mfa_setup,omitempty"`
+	AccessToken           string      `json:"access_token,omitempty"`
+	AccessTokenExpiresAt  time.Time   `json:"access_token_expires_at,omitempty"`
+	RefreshToken          string      `json:"refresh_token,omitempty"`
+	RefreshTokenExpiresAt time.Time   `json:"refresh_token_expires_at,omitempty"`
+	User                  domain.User `json:"user,omitempty"`
+	Roles                 []string    `json:"roles,omitempty"`
 }
 
 // NewAuthService 创建 AuthService 实例，注入存储层、JWT 管理器和应用配置。
@@ -48,8 +50,17 @@ func (s *AuthService) Login(username, password, mfaCode string) (LoginResult, er
 	if err != nil || !ok {
 		return LoginResult{}, domain.ErrUnauthorized
 	}
-	if user.MFAEnabled && !auth.ValidateTOTP(mfaCode, user.MFASecret) {
-		return LoginResult{}, domain.ErrUnauthorized
+	mfaRequired := user.MFAEnabled || settingBool(s.store, "security.mfa_required", false)
+	if mfaRequired {
+		if !user.MFAEnabled {
+			return s.issueSetupTokens(user)
+		}
+		if strings.TrimSpace(mfaCode) == "" {
+			return LoginResult{RequireMFA: true}, nil
+		}
+		if !auth.ValidateTOTP(mfaCode, user.MFASecret) {
+			return LoginResult{}, domain.ErrUnauthorized
+		}
 	}
 	_ = s.store.TouchUserLogin(user.ID)
 	return s.issueTokens(user)
@@ -70,6 +81,12 @@ func (s *AuthService) Refresh(refreshToken string) (LoginResult, error) {
 	if err != nil {
 		return LoginResult{}, err
 	}
+	if !user.IsActive {
+		return LoginResult{}, domain.ErrUnauthorized
+	}
+	if settingBool(s.store, "security.mfa_required", false) && !user.MFAEnabled {
+		return s.issueSetupTokens(user)
+	}
 	return s.issueTokens(user)
 }
 
@@ -83,6 +100,9 @@ func (s *AuthService) SetupMFA(userID int64) (auth.TOTPSetup, error) {
 	user, err := s.store.GetUser(userID)
 	if err != nil {
 		return auth.TOTPSetup{}, err
+	}
+	if user.MFAEnabled {
+		return auth.TOTPSetup{}, domain.ErrConflict
 	}
 	setup, err := auth.GenerateTOTP(s.cfg.TOTP.Issuer, user.Username)
 	if err != nil {
@@ -120,6 +140,14 @@ func (s *AuthService) issueTokens(user domain.User) (LoginResult, error) {
 	if err != nil {
 		return LoginResult{}, err
 	}
+	return s.issueTokensWithRoles(user, roles, false)
+}
+
+func (s *AuthService) issueSetupTokens(user domain.User) (LoginResult, error) {
+	return s.issueTokensWithRoles(user, nil, true)
+}
+
+func (s *AuthService) issueTokensWithRoles(user domain.User, roles []string, requireMFASetup bool) (LoginResult, error) {
 	access, accessExpires, err := s.jwt.SignAccessToken(user.ID, user.Username, roles)
 	if err != nil {
 		return LoginResult{}, err
@@ -137,6 +165,7 @@ func (s *AuthService) issueTokens(user domain.User) (LoginResult, error) {
 		return LoginResult{}, err
 	}
 	return LoginResult{
+		RequireMFASetup:       requireMFASetup,
 		AccessToken:           access,
 		AccessTokenExpiresAt:  accessExpires,
 		RefreshToken:          refreshRaw,

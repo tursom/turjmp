@@ -8,6 +8,7 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,6 +22,17 @@ import (
 // Store 是数据库持久化操作的统一入口，通过 sqlx 执行所有 CRUD 操作。
 type Store struct {
 	db *DB
+}
+
+// AuditLogFilter describes server-side filtering and pagination for audit logs.
+type AuditLogFilter struct {
+	Search   string
+	UserID   int64
+	Action   string
+	DateFrom *time.Time
+	DateTo   *time.Time
+	Limit    int
+	Offset   int
 }
 
 // NewStore 创建 Store 实例。
@@ -140,6 +152,13 @@ func (s *Store) ListRoles() ([]domain.Role, error) {
 	return roles, err
 }
 
+// ListUserGroups 返回所有用户组列表，按 ID 升序排列。
+func (s *Store) ListUserGroups() ([]domain.UserGroup, error) {
+	var groups []domain.UserGroup
+	err := s.db.Select(&groups, `SELECT * FROM user_groups ORDER BY id`)
+	return groups, err
+}
+
 // DeleteRole 按 ID 删除角色记录。
 func (s *Store) DeleteRole(id int64) error {
 	_, err := s.db.Exec(s.query(`DELETE FROM roles WHERE id = ?`), id)
@@ -198,8 +217,18 @@ func (s *Store) GetRefreshTokenByHash(hash string) (domain.RefreshToken, error) 
 
 // RevokeRefreshToken 撤销单个 refresh token（设置 revoked_at 为当前时间），仅对尚未撤销的记录生效。
 func (s *Store) RevokeRefreshToken(id string) error {
-	_, err := s.db.Exec(s.query(`UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND revoked_at IS NULL`), id)
-	return err
+	result, err := s.db.Exec(s.query(`UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND revoked_at IS NULL`), id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return domain.ErrUnauthorized
+	}
+	return nil
 }
 
 // RevokeUserRefreshTokens 撤销指定用户的所有未撤销 refresh token。
@@ -481,19 +510,50 @@ func (s *Store) DeletePermission(id int64) error {
 // 通过多层 JOIN 查询资产权限表：验证用户关联、资产关联、权限生效时间、actions 模糊匹配及账号级过滤。
 func (s *Store) HasAssetPermission(userID, assetID, accountID int64, action string) (bool, error) {
 	var n int
-	q := s.query(`SELECT COUNT(1)
+	q := s.query(`WITH RECURSIVE asset_node_ids(id, parent_id) AS (
+			SELECT n.id, n.parent_id
+			FROM nodes n
+			JOIN assets a ON a.node_id = n.id
+			WHERE a.id = ?
+			UNION
+			SELECT n.id, n.parent_id
+			FROM nodes n
+			JOIN asset_nodes an ON an.node_id = n.id
+			WHERE an.asset_id = ?
+			UNION
+			SELECT parent.id, parent.parent_id
+			FROM nodes parent
+			JOIN asset_node_ids child ON child.parent_id = parent.id
+		)
+		SELECT COUNT(1)
 		FROM asset_permissions p
-		JOIN perm_users pu ON pu.permission_id = p.id AND pu.user_id = ?
-		JOIN perm_assets pa ON pa.permission_id = p.id AND pa.asset_id = ?
 		WHERE p.is_active = ?
 		  AND (p.date_start IS NULL OR p.date_start <= CURRENT_TIMESTAMP)
 		  AND (p.date_expired IS NULL OR p.date_expired > CURRENT_TIMESTAMP)
 		  AND (',' || p.actions || ',') LIKE ?
 		  AND (
+		    EXISTS (SELECT 1 FROM perm_users pu WHERE pu.permission_id = p.id AND pu.user_id = ?)
+		    OR EXISTS (
+		      SELECT 1
+		      FROM perm_user_groups pug
+		      JOIN group_users gu ON gu.group_id = pug.group_id
+		      WHERE pug.permission_id = p.id AND gu.user_id = ?
+		    )
+		  )
+		  AND (
+		    EXISTS (SELECT 1 FROM perm_assets pa WHERE pa.permission_id = p.id AND pa.asset_id = ?)
+		    OR EXISTS (
+		      SELECT 1
+		      FROM perm_nodes pn
+		      JOIN asset_node_ids ani ON ani.id = pn.node_id
+		      WHERE pn.permission_id = p.id
+		    )
+		  )
+		  AND (
 		    EXISTS (SELECT 1 FROM perm_accounts pac WHERE pac.permission_id = p.id AND pac.account_id = ?)
 		    OR NOT EXISTS (SELECT 1 FROM perm_accounts pac2 WHERE pac2.permission_id = p.id)
 		  )`)
-	err := s.db.Get(&n, q, userID, assetID, true, "%,"+action+",%", accountID)
+	err := s.db.Get(&n, q, assetID, assetID, true, "%,"+action+",%", userID, userID, assetID, accountID)
 	return n > 0, err
 }
 
@@ -584,11 +644,89 @@ func (s *Store) ListSettings() ([]domain.Setting, error) {
 	return settings, err
 }
 
-// ListAuditLogs 返回最近的审计日志列表（最多 200 条），按 ID 降序排列（最新的在前）。
-func (s *Store) ListAuditLogs() ([]domain.AuditLog, error) {
+// ListAuditLogs 返回符合条件的审计日志列表和总数，按 ID 降序排列（最新的在前）。
+func (s *Store) ListAuditLogs(filter AuditLogFilter) ([]domain.AuditLog, int, error) {
 	var logs []domain.AuditLog
-	err := s.db.Select(&logs, `SELECT * FROM audit_logs ORDER BY id DESC LIMIT 200`)
-	return logs, err
+	where, args := auditLogWhere(filter)
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	var total int
+	countQuery := s.query(`SELECT COUNT(*) FROM audit_logs ` + where)
+	if err := s.db.Get(&total, countQuery, args...); err != nil {
+		return nil, 0, err
+	}
+
+	listArgs := append([]any{}, args...)
+	listArgs = append(listArgs, limit, offset)
+	listQuery := s.query(`SELECT * FROM audit_logs ` + where + ` ORDER BY id DESC LIMIT ? OFFSET ?`)
+	if err := s.db.Select(&logs, listQuery, listArgs...); err != nil {
+		return nil, 0, err
+	}
+	return logs, total, nil
+}
+
+// ListSessionCommandLogs 返回指定会话关联的命令/SQL审计日志。
+func (s *Store) ListSessionCommandLogs(sessionID int64) ([]domain.AuditLog, error) {
+	var logs []domain.AuditLog
+	if err := s.db.Select(&logs, `SELECT * FROM audit_logs WHERE action IN ('db.query', 'ssh.command') ORDER BY id DESC`); err != nil {
+		return nil, err
+	}
+	filtered := logs[:0]
+	for _, log := range logs {
+		if auditLogSessionID(log.Detail) == sessionID {
+			filtered = append(filtered, log)
+		}
+	}
+	return filtered, nil
+}
+
+func auditLogWhere(filter AuditLogFilter) (string, []any) {
+	conditions := []string{"1 = 1"}
+	args := []any{}
+	if filter.UserID > 0 {
+		conditions = append(conditions, "user_id = ?")
+		args = append(args, filter.UserID)
+	}
+	if action := strings.TrimSpace(filter.Action); action != "" {
+		conditions = append(conditions, "action = ?")
+		args = append(args, action)
+	}
+	if filter.DateFrom != nil {
+		conditions = append(conditions, "created_at >= ?")
+		args = append(args, *filter.DateFrom)
+	}
+	if filter.DateTo != nil {
+		conditions = append(conditions, "created_at <= ?")
+		args = append(args, *filter.DateTo)
+	}
+	if search := strings.ToLower(strings.TrimSpace(filter.Search)); search != "" {
+		conditions = append(conditions, `LOWER(
+			action || ' ' || resource || ' ' || remote_addr || ' ' || CAST(detail AS TEXT) || ' ' ||
+			COALESCE(CAST(user_id AS TEXT), '')
+		) LIKE ?`)
+		args = append(args, "%"+search+"%")
+	}
+	return "WHERE " + strings.Join(conditions, " AND "), args
+}
+
+func auditLogSessionID(detail string) int64 {
+	var payload struct {
+		SessionID int64 `json:"session_id"`
+	}
+	if err := json.Unmarshal([]byte(detail), &payload); err != nil {
+		return 0
+	}
+	return payload.SessionID
 }
 
 // Audit 写入一条审计日志记录。
