@@ -1,16 +1,16 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2>{{ isEdit ? 'Edit Permission' : 'New Permission' }}</h2>
+      <h2>{{ isEdit ? '编辑授权' : '新建授权' }}</h2>
       <el-button @click="goBack">
         <el-icon><ArrowLeft /></el-icon>
-        Back to Permissions
+        返回授权
       </el-button>
     </div>
 
     <div v-if="loadingDetail" class="page-loading">
       <el-icon class="is-loading" :size="24"><Loading /></el-icon>
-      <span>Loading permission...</span>
+      <span>正在加载授权...</span>
     </div>
 
     <el-form
@@ -22,51 +22,51 @@
       class="perm-form"
       @submit.prevent="handleSubmit"
     >
-      <el-form-item label="Name" prop="name">
-        <el-input v-model="form.name" placeholder="Enter permission name" />
+      <el-form-item label="名称" prop="name">
+        <el-input v-model="form.name" placeholder="输入授权名称" />
       </el-form-item>
 
-      <el-form-item label="Actions" prop="actions">
+      <el-form-item label="动作" prop="actions">
         <div class="actions-group">
           <el-checkbox-group v-model="actionChecks">
-            <el-checkbox label="connect">Connect</el-checkbox>
-            <el-checkbox label="upload">Upload</el-checkbox>
-            <el-checkbox label="download">Download</el-checkbox>
+            <el-checkbox label="connect">连接</el-checkbox>
+            <el-checkbox label="upload">上传</el-checkbox>
+            <el-checkbox label="download">下载</el-checkbox>
           </el-checkbox-group>
           <el-input
             v-model="actionCustom"
-            placeholder="Custom actions (comma-separated)"
+            placeholder="自定义动作（英文逗号分隔）"
             class="action-custom"
           />
         </div>
       </el-form-item>
 
-      <el-form-item label="Date Start">
+      <el-form-item label="开始时间">
         <el-date-picker
           v-model="form.date_start"
           type="datetime"
-          placeholder="Start date (optional)"
+          placeholder="开始时间（可选）"
           style="width: 100%"
           value-format="YYYY-MM-DDTHH:mm:ssZ"
         />
       </el-form-item>
 
-      <el-form-item label="Date Expired">
+      <el-form-item label="过期时间">
         <el-date-picker
           v-model="form.date_expired"
           type="datetime"
-          placeholder="Expiry date (optional)"
+          placeholder="过期时间（可选）"
           style="width: 100%"
           value-format="YYYY-MM-DDTHH:mm:ssZ"
         />
       </el-form-item>
 
-      <el-form-item label="Users">
+      <el-form-item label="用户">
         <el-select
           v-model="form.user_ids"
           multiple
           filterable
-          placeholder="Select users"
+          placeholder="选择用户"
           style="width: 100%"
         >
           <el-option
@@ -78,12 +78,12 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item label="User Groups">
+      <el-form-item label="用户组">
         <el-select
           v-model="form.group_ids"
           multiple
           filterable
-          placeholder="Select user groups"
+          placeholder="选择用户组"
           style="width: 100%"
         >
           <el-option
@@ -95,12 +95,12 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item label="Assets">
+      <el-form-item label="资产">
         <el-select
           v-model="form.asset_ids"
           multiple
           filterable
-          placeholder="Select assets"
+          placeholder="选择资产"
           style="width: 100%"
         >
           <el-option
@@ -112,12 +112,12 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item label="Nodes">
+      <el-form-item label="节点">
         <el-select
           v-model="form.node_ids"
           multiple
           filterable
-          placeholder="Select nodes"
+          placeholder="选择节点"
           style="width: 100%"
         >
           <el-option
@@ -129,12 +129,12 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item label="Accounts">
+      <el-form-item label="账号">
         <el-select
           v-model="form.account_ids"
           multiple
           filterable
-          placeholder="Select assets first, then accounts"
+          placeholder="请先选择资产，再选择账号"
           style="width: 100%"
         >
           <el-option
@@ -146,15 +146,15 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item label="Status">
-        <el-switch v-model="form.is_active" active-text="Active" inactive-text="Inactive" />
+      <el-form-item label="状态">
+        <el-switch v-model="form.is_active" active-text="活跃" inactive-text="停用" />
       </el-form-item>
 
       <el-form-item>
         <el-button type="primary" native-type="submit" :loading="submitting">
-          {{ isEdit ? 'Update' : 'Create' }}
+          {{ isEdit ? '更新' : '创建' }}
         </el-button>
-        <el-button @click="goBack">Cancel</el-button>
+        <el-button @click="goBack">取消</el-button>
       </el-form-item>
     </el-form>
   </div>
@@ -204,7 +204,7 @@ const actionCustom = ref('')
 let accountsRequestSeq = 0
 
 const rules: FormRules = {
-  name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
+  name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
 }
 
 function buildActions(): string[] {
@@ -328,7 +328,7 @@ async function fetchPermission() {
       await loadAccountsForAssets(form.asset_ids)
     }
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to load permission'
+    const msg = err instanceof Error ? err.message : '加载授权失败'
     ElMessage.error(msg)
   } finally {
     loadingDetail.value = false
@@ -360,14 +360,14 @@ async function handleSubmit() {
   try {
     if (isEdit.value && permissionId.value) {
       await permissionsApi.update(permissionId.value, payload)
-      ElMessage.success('Permission updated')
+      ElMessage.success('授权已更新')
     } else {
       await permissionsApi.create(payload)
-      ElMessage.success('Permission created')
+      ElMessage.success('授权已创建')
     }
     router.push('/permissions')
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Save failed'
+    const msg = err instanceof Error ? err.message : '保存失败'
     ElMessage.error(msg)
   } finally {
     submitting.value = false

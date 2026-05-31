@@ -2,11 +2,11 @@
   <div class="no-access-page">
     <el-result
       icon="warning"
-      title="No accessible console pages"
-      sub-title="Your account is signed in, but current permissions do not allow any management console page. Ask an administrator to adjust your role permissions."
+      title="没有可访问的管理页面"
+      sub-title="你已登录，但当前权限无法访问任何管理台页面。请联系管理员调整角色权限。"
     >
       <template #extra>
-        <el-button type="primary" @click="authStore.doLogout()">Back to Login</el-button>
+        <el-button type="primary" @click="authStore.doLogout()">返回登录</el-button>
       </template>
     </el-result>
   </div>

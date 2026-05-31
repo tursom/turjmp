@@ -1,17 +1,17 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2>Users</h2>
+      <h2>用户</h2>
       <el-button v-if="canCreateUsers" type="primary" @click="goCreate">
         <el-icon><Plus /></el-icon>
-        New User
+        新建用户
       </el-button>
     </div>
 
     <div class="page-filters">
       <el-input
         v-model="searchQuery"
-        placeholder="Search by username or name..."
+        placeholder="按用户名或姓名搜索..."
         clearable
         class="search-input"
         @input="handleSearch"
@@ -20,13 +20,13 @@
 
     <div v-if="loading" class="page-loading">
       <el-icon class="is-loading" :size="24"><Loading /></el-icon>
-      <span>Loading users...</span>
+      <span>正在加载用户...</span>
     </div>
 
     <div v-else-if="error" class="page-error">
-      <el-result icon="error" title="Failed to load users" :sub-title="error">
+      <el-result icon="error" title="加载用户失败" :sub-title="error">
         <template #extra>
-          <el-button type="primary" @click="fetchUsers">Retry</el-button>
+          <el-button type="primary" @click="fetchUsers">重试</el-button>
         </template>
       </el-result>
     </div>
@@ -37,36 +37,36 @@
       border
       stripe
       style="width: 100%"
-      empty-text="No users found"
+      empty-text="未找到用户"
     >
       <el-table-column prop="id" label="ID" width="70" align="center" />
-      <el-table-column prop="username" label="Username" min-width="130" />
-      <el-table-column prop="name" label="Name" min-width="130" />
-      <el-table-column prop="email" label="Email" min-width="180" />
+      <el-table-column prop="username" label="用户名" min-width="130" />
+      <el-table-column prop="name" label="姓名" min-width="130" />
+      <el-table-column prop="email" label="邮箱" min-width="180" />
       <el-table-column label="MFA" width="80" align="center">
         <template #default="{ row }">
           <el-tag :type="row.mfa_enabled ? 'success' : 'info'" size="small">
-            {{ row.mfa_enabled ? 'On' : 'Off' }}
+            {{ row.mfa_enabled ? '已启用' : '未启用' }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="Status" width="90" align="center">
+      <el-table-column label="状态" width="90" align="center">
         <template #default="{ row }">
           <el-tag :type="row.is_active ? 'success' : 'danger'" size="small">
-            {{ row.is_active ? 'Active' : 'Inactive' }}
+            {{ row.is_active ? '活跃' : '停用' }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="Last Login" width="180" align="center">
+      <el-table-column label="最后登录" width="180" align="center">
         <template #default="{ row }">
           {{ row.last_login_at ? formatDate(row.last_login_at) : '—' }}
         </template>
       </el-table-column>
-      <el-table-column label="Actions" width="160" align="center" fixed="right">
+      <el-table-column label="操作" width="160" align="center" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="canUpdateUsers" size="small" @click="goEdit(row.id)">Edit</el-button>
+          <el-button v-if="canUpdateUsers" size="small" @click="goEdit(row.id)">编辑</el-button>
           <el-button v-if="canDeleteUsers" size="small" type="danger" @click="handleDelete(row)">
-            Delete
+            删除
           </el-button>
         </template>
       </el-table-column>
@@ -122,7 +122,7 @@ async function fetchUsers() {
   try {
     users.value = await usersApi.list()
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to load users'
+    const msg = err instanceof Error ? err.message : '加载用户失败'
     error.value = msg
     ElMessage.error(msg)
   } finally {
@@ -137,9 +137,9 @@ function handleSearch() {
 async function handleDelete(user: User) {
   try {
     await ElMessageBox.confirm(
-      `Delete user "${user.username}"? This action cannot be undone.`,
-      'Confirm Delete',
-      { confirmButtonText: 'Delete', cancelButtonText: 'Cancel', type: 'warning' },
+      `确认删除用户“${user.username}”吗？此操作不可撤销。`,
+      '确认删除',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
     )
   } catch {
     return // cancelled
@@ -147,10 +147,10 @@ async function handleDelete(user: User) {
 
   try {
     await usersApi.remove(user.id)
-    ElMessage.success(`User "${user.username}" deleted`)
+    ElMessage.success(`用户“${user.username}”已删除`)
     users.value = users.value.filter((u) => u.id !== user.id)
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Delete failed'
+    const msg = err instanceof Error ? err.message : '删除失败'
     ElMessage.error(msg)
   }
 }

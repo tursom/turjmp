@@ -1,23 +1,23 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2>{{ role ? `Edit Role: ${role.name}` : 'Edit Role' }}</h2>
+      <h2>{{ role ? `编辑角色：${role.name}` : '编辑角色' }}</h2>
       <el-button @click="goBack">
         <el-icon><ArrowLeft /></el-icon>
-        Back to Roles
+        返回角色
       </el-button>
     </div>
 
     <div v-if="loading" class="page-loading">
       <el-icon class="is-loading" :size="24"><Loading /></el-icon>
-      <span>Loading role...</span>
+      <span>正在加载角色...</span>
     </div>
 
     <template v-else-if="role">
       <!-- Basic Info -->
       <el-card class="section-card" shadow="never">
         <template #header>
-          <span class="card-title">Basic Information</span>
+          <span class="card-title">基本信息</span>
         </template>
         <el-form
           ref="infoFormRef"
@@ -26,20 +26,20 @@
           label-width="120px"
           class="info-form"
         >
-          <el-form-item label="Name" prop="name">
-            <el-input v-model="infoForm.name" placeholder="Role name" />
+          <el-form-item label="名称" prop="name">
+            <el-input v-model="infoForm.name" placeholder="角色名称" />
           </el-form-item>
-          <el-form-item label="Description" prop="description">
+          <el-form-item label="描述" prop="description">
             <el-input
               v-model="infoForm.description"
               type="textarea"
               :rows="3"
-              placeholder="Description"
+              placeholder="描述"
             />
           </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="savingInfo" @click="saveInfo">
-              Save
+              保存
             </el-button>
           </el-form-item>
         </el-form>
@@ -49,10 +49,10 @@
       <el-card class="section-card" shadow="never">
         <template #header>
           <div class="card-header-row">
-            <span class="card-title">Permission Matrix</span>
+            <span class="card-title">权限矩阵</span>
             <div class="card-actions">
-              <el-button size="small" @click="selectAll">Select All</el-button>
-              <el-button size="small" @click="deselectAll">Deselect All</el-button>
+              <el-button size="small" @click="selectAll">全选</el-button>
+              <el-button size="small" @click="deselectAll">取消全选</el-button>
             </div>
           </div>
         </template>
@@ -61,7 +61,7 @@
           <table class="perm-matrix">
             <thead>
               <tr>
-                <th class="path-col">Endpoint</th>
+                <th class="path-col">端点</th>
                 <th v-for="m in methods" :key="m" class="method-col">{{ methodLabel(m) }}</th>
               </tr>
             </thead>
@@ -91,7 +91,7 @@
             :loading="savingPerms"
             @click="savePermissions"
           >
-            Save Permissions
+            保存权限
           </el-button>
         </div>
       </el-card>
@@ -124,8 +124,8 @@ const infoForm = reactive({
 })
 
 const infoRules: FormRules = {
-  name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
-  description: [{ required: true, message: 'Description is required', trigger: 'blur' }],
+  name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
+  description: [{ required: true, message: '请输入描述', trigger: 'blur' }],
 }
 
 // Permission matrix. Paths must match Gin c.FullPath(), including /api/v1.
@@ -182,7 +182,7 @@ function isChecked(path: string, method: string): boolean {
 }
 
 function methodLabel(method: string): string {
-  return method === '.*' ? 'ALL' : method
+  return method === '.*' ? '全部' : method
 }
 
 function knownPath(path: string): boolean {
@@ -251,7 +251,7 @@ async function fetchRole() {
     checkedPerms.value = s
     preservedPolicies.value = unknown
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to load role'
+    const msg = err instanceof Error ? err.message : '加载角色失败'
     ElMessage.error(msg)
   } finally {
     loading.value = false
@@ -273,9 +273,9 @@ async function saveInfo() {
       description: infoForm.description,
     })
     role.value = updated
-    ElMessage.success('Role info updated')
+    ElMessage.success('角色信息已更新')
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to update role'
+    const msg = err instanceof Error ? err.message : '更新角色失败'
     ElMessage.error(msg)
   } finally {
     savingInfo.value = false
@@ -296,9 +296,9 @@ async function savePermissions() {
   savingPerms.value = true
   try {
     await rolesApi.setPermissions(roleId, { permissions })
-    ElMessage.success('Permissions updated')
+    ElMessage.success('权限已更新')
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to save permissions'
+    const msg = err instanceof Error ? err.message : '保存权限失败'
     ElMessage.error(msg)
   } finally {
     savingPerms.value = false

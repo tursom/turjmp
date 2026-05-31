@@ -78,7 +78,7 @@ export function getAuthSnapshot(): AuthSnapshot {
 
 export function persistAuthResult(result: LoginResult): AuthSnapshot {
   if (!result.access_token || !result.refresh_token || !result.user) {
-    throw new Error('Invalid login response')
+    throw new Error('登录响应无效')
   }
   setAccessToken(result.access_token)
   setRefreshToken(result.refresh_token)

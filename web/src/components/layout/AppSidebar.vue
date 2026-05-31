@@ -17,15 +17,15 @@ interface MenuItem {
 }
 
 const menuItems: MenuItem[] = [
-  { index: '/dashboard', icon: Monitor, label: 'Dashboard', access: 'dashboard' },
-  { index: '/assets', icon: Monitor, label: 'Assets', access: 'assets' },
-  { index: '/platforms', icon: Tools, label: 'Platforms', access: 'platforms' },
-  { index: '/users', icon: User, label: 'Users', access: 'users' },
-  { index: '/roles', icon: Setting, label: 'Roles', access: 'roles' },
-  { index: '/permissions', icon: Lock, label: 'Permissions', access: 'permissions' },
-  { index: '/sessions', icon: Connection, label: 'Sessions', access: 'sessions' },
-  { index: '/audit-logs', icon: Document, label: 'Audit Logs', access: 'audit_logs' },
-  { index: '/settings', icon: Tools, label: 'Settings', access: 'settings' },
+  { index: '/dashboard', icon: Monitor, label: '仪表盘', access: 'dashboard' },
+  { index: '/assets', icon: Monitor, label: '资产', access: 'assets' },
+  { index: '/platforms', icon: Tools, label: '平台模板', access: 'platforms' },
+  { index: '/users', icon: User, label: '用户', access: 'users' },
+  { index: '/roles', icon: Setting, label: '角色', access: 'roles' },
+  { index: '/permissions', icon: Lock, label: '资产授权', access: 'permissions' },
+  { index: '/sessions', icon: Connection, label: '会话', access: 'sessions' },
+  { index: '/audit-logs', icon: Document, label: '审计日志', access: 'audit_logs' },
+  { index: '/settings', icon: Tools, label: '系统设置', access: 'settings' },
 ]
 
 function canShow(item: MenuItem): boolean {

@@ -2,16 +2,15 @@
   <div class="mfa-setup-container">
     <div class="mfa-card">
       <div class="mfa-header">
-        <h1 class="mfa-title">Multi-Factor Authentication Setup</h1>
+        <h1 class="mfa-title">MFA 多因素认证设置</h1>
         <p class="mfa-subtitle">
-          Scan the QR code with your authenticator app or enter the secret key
-          manually. Then verify with a 6-digit code to complete setup.
+          使用认证器应用扫描二维码，或手动输入密钥。随后输入 6 位验证码完成设置。
         </p>
       </div>
 
       <div v-if="loading" class="mfa-loading">
         <el-icon class="is-loading" :size="32"><Loading /></el-icon>
-        <p>Loading MFA setup...</p>
+        <p>正在加载 MFA 设置...</p>
       </div>
 
       <template v-else-if="setupData">
@@ -19,15 +18,15 @@
           <img
             v-if="qrCodeUrl"
             :src="qrCodeUrl"
-            alt="MFA QR Code"
+            alt="MFA 二维码"
             class="mfa-qr-image"
           />
           <div class="mfa-secret">
-            <label class="mfa-label">Secret Key</label>
+            <label class="mfa-label">密钥</label>
             <div class="mfa-secret-row">
               <code class="mfa-secret-text">{{ setupData.secret }}</code>
               <el-button size="small" text @click="copySecret">
-                Copy
+                复制
               </el-button>
             </div>
           </div>
@@ -36,9 +35,9 @@
         <el-divider />
 
         <div class="mfa-verify-section">
-          <h3>Verify Setup</h3>
+          <h3>验证设置</h3>
           <p class="mfa-verify-hint">
-            Enter the 6-digit code from your authenticator app to confirm.
+            输入认证器应用中的 6 位验证码以确认启用。
           </p>
           <el-form
             ref="verifyFormRef"
@@ -64,7 +63,7 @@
                 size="large"
                 class="mfa-verify-btn"
               >
-                {{ verifying ? 'Verifying...' : 'Verify & Activate' }}
+                {{ verifying ? '验证中...' : '验证并启用' }}
               </el-button>
             </el-form-item>
           </el-form>
@@ -72,9 +71,9 @@
       </template>
 
       <div v-else class="mfa-error">
-        <el-result icon="error" title="Setup Failed" sub-title="Could not load MFA setup data.">
+        <el-result icon="error" title="设置失败" sub-title="无法加载 MFA 设置数据。">
           <template #extra>
-            <el-button type="primary" @click="fetchSetup">Retry</el-button>
+            <el-button type="primary" @click="fetchSetup">重试</el-button>
           </template>
         </el-result>
       </div>
@@ -107,8 +106,8 @@ const verifyForm = reactive({
 
 const verifyRules: FormRules = {
   code: [
-    { required: true, message: 'Verification code is required', trigger: 'blur' },
-    { pattern: /^\d{6}$/, message: 'Must be 6 digits', trigger: 'blur' },
+    { required: true, message: '请输入验证码', trigger: 'blur' },
+    { pattern: /^\d{6}$/, message: '验证码必须是 6 位数字', trigger: 'blur' },
   ],
 }
 
@@ -122,7 +121,7 @@ async function fetchSetup() {
       width: 200,
     })
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to load MFA setup'
+    const msg = err instanceof Error ? err.message : '加载 MFA 设置失败'
     ElMessage.error(msg)
   } finally {
     loading.value = false
@@ -139,7 +138,7 @@ async function handleVerify() {
   verifying.value = true
   try {
     await authApi.mfaVerify(verifyForm.code)
-    ElMessage.success('MFA has been activated successfully')
+    ElMessage.success('MFA 已成功启用')
     if (authStore.mfaSetupRequired) {
       authStore.resetAuth()
       router.push('/login')
@@ -148,7 +147,7 @@ async function handleVerify() {
     await authStore.loadAccess()
     router.push(defaultRouteForAccess(authStore.access))
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Verification failed'
+    const msg = err instanceof Error ? err.message : '验证失败'
     ElMessage.error(msg)
   } finally {
     verifying.value = false
@@ -159,9 +158,9 @@ async function copySecret() {
   if (!setupData.value) return
   try {
     await globalThis.navigator.clipboard.writeText(setupData.value.secret)
-    ElMessage.success('Secret key copied to clipboard')
+    ElMessage.success('密钥已复制到剪贴板')
   } catch {
-    ElMessage.warning('Failed to copy to clipboard')
+    ElMessage.warning('复制到剪贴板失败')
   }
 }
 

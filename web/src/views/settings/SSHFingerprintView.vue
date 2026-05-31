@@ -1,7 +1,7 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2>SSH Host Key Fingerprints</h2>
+      <h2>SSH 主机密钥指纹</h2>
     </div>
 
     <div v-if="loading" v-loading="loading" class="loading-placeholder" />
@@ -16,7 +16,7 @@
 
     <el-empty
       v-else-if="!loading && fingerprints.length === 0"
-      description="No SSH host keys configured"
+      description="暂无 SSH 主机密钥配置"
     />
 
     <el-table
@@ -24,11 +24,11 @@
       :data="fingerprints"
       stripe
       border
-      empty-text="No fingerprints available"
+      empty-text="暂无可用指纹"
     >
-      <el-table-column prop="algorithm" label="Algorithm" width="160" />
+      <el-table-column prop="algorithm" label="算法" width="160" />
 
-      <el-table-column label="Fingerprint" min-width="340">
+      <el-table-column label="指纹" min-width="340">
         <template #default="scope">
           <div class="fingerprint-cell">
             <code class="fingerprint-text">{{ scope.row.fingerprint }}</code>
@@ -39,13 +39,13 @@
               :icon="CopyDocument"
               @click="copyFingerprint(scope.row.fingerprint)"
             >
-              Copy
+              复制
             </el-button>
           </div>
         </template>
       </el-table-column>
 
-      <el-table-column label="Public Key" min-width="320">
+      <el-table-column label="公钥" min-width="320">
         <template #default="scope">
           <div class="pubkey-cell">
             <code class="pubkey-text">
@@ -61,7 +61,7 @@
               type="primary"
               @click="toggleKeyExpansion(scope.row.fingerprint)"
             >
-              {{ expandedKeys.has(scope.row.fingerprint) ? 'Show less' : 'Show more' }}
+              {{ expandedKeys.has(scope.row.fingerprint) ? '收起' : '展开' }}
             </el-button>
           </div>
         </template>
@@ -99,9 +99,9 @@ function toggleKeyExpansion(fingerprint: string): void {
 async function copyFingerprint(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
-    ElMessage.success('Fingerprint copied to clipboard')
+    ElMessage.success('指纹已复制到剪贴板')
   } catch {
-    ElMessage.error('Failed to copy fingerprint')
+    ElMessage.error('复制指纹失败')
   }
 }
 
@@ -112,7 +112,7 @@ async function fetchFingerprints(): Promise<void> {
     fingerprints.value = await settingsApi.sshFingerprint()
   } catch (err) {
     error.value =
-      err instanceof Error ? err.message : 'Failed to load SSH fingerprints'
+      err instanceof Error ? err.message : '加载 SSH 指纹失败'
   } finally {
     loading.value = false
   }

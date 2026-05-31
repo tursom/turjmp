@@ -47,7 +47,7 @@ watch(
   <el-container class="app-layout">
     <el-aside :width="isCollapse ? '64px' : '220px'" class="app-aside">
       <div class="logo">
-        <img src="/favicon.svg" class="logo-img" alt="Turjmp logo" />
+        <img src="/favicon.svg" class="logo-img" alt="Turjmp 标志" />
         <span v-show="!isCollapse" class="logo-text">{{ appStore.siteName }}</span>
       </div>
       <AppSidebar :collapse="isCollapse" :active-menu="activeMenu" />

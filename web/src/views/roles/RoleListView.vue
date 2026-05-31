@@ -1,22 +1,22 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2>Roles</h2>
+      <h2>角色</h2>
       <el-button v-if="canCreateRoles" type="primary" @click="openCreate">
         <el-icon><Plus /></el-icon>
-        New Role
+        新建角色
       </el-button>
     </div>
 
     <div v-if="loading" class="page-loading">
       <el-icon class="is-loading" :size="24"><Loading /></el-icon>
-      <span>Loading roles...</span>
+      <span>正在加载角色...</span>
     </div>
 
     <div v-else-if="error" class="page-error">
-      <el-result icon="error" title="Failed to load roles" :sub-title="error">
+      <el-result icon="error" title="加载角色失败" :sub-title="error">
         <template #extra>
-          <el-button type="primary" @click="fetchRoles">Retry</el-button>
+          <el-button type="primary" @click="fetchRoles">重试</el-button>
         </template>
       </el-result>
     </div>
@@ -27,40 +27,40 @@
       border
       stripe
       style="width: 100%"
-      empty-text="No roles found"
+      empty-text="未找到角色"
     >
       <el-table-column prop="id" label="ID" width="80" align="center" />
-      <el-table-column prop="name" label="Name" min-width="160" />
-      <el-table-column prop="description" label="Description" min-width="260" />
-      <el-table-column label="Actions" width="200" align="center" fixed="right">
+      <el-table-column prop="name" label="名称" min-width="160" />
+      <el-table-column prop="description" label="描述" min-width="260" />
+      <el-table-column label="操作" width="200" align="center" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="canUpdateRoles" size="small" @click="goEdit(row.id)">Edit</el-button>
+          <el-button v-if="canUpdateRoles" size="small" @click="goEdit(row.id)">编辑</el-button>
           <el-button v-if="canDeleteRoles" size="small" type="danger" @click="handleDelete(row)">
-            Delete
+            删除
           </el-button>
         </template>
       </el-table-column>
     </el-table>
 
     <!-- Create Role Dialog -->
-    <el-dialog v-model="dialogVisible" title="New Role" width="480px" @close="resetForm">
+    <el-dialog v-model="dialogVisible" title="新建角色" width="480px" @close="resetForm">
       <el-form ref="dialogFormRef" :model="createForm" :rules="createRules" label-width="100px">
-        <el-form-item label="Name" prop="name">
-          <el-input v-model="createForm.name" placeholder="Enter role name" />
+        <el-form-item label="名称" prop="name">
+          <el-input v-model="createForm.name" placeholder="输入角色名称" />
         </el-form-item>
-        <el-form-item label="Description" prop="description">
+        <el-form-item label="描述" prop="description">
           <el-input
             v-model="createForm.description"
             type="textarea"
             :rows="3"
-            placeholder="Enter description"
+            placeholder="输入描述"
           />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
+        <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="creating" @click="handleCreate">
-          Create
+          创建
         </el-button>
       </template>
     </el-dialog>
@@ -96,8 +96,8 @@ const createForm = reactive({
 })
 
 const createRules: FormRules = {
-  name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
-  description: [{ required: true, message: 'Description is required', trigger: 'blur' }],
+  name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
+  description: [{ required: true, message: '请输入描述', trigger: 'blur' }],
 }
 
 function goEdit(id: number) {
@@ -119,7 +119,7 @@ async function fetchRoles() {
   try {
     roles.value = await rolesApi.list()
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to load roles'
+    const msg = err instanceof Error ? err.message : '加载角色失败'
     error.value = msg
     ElMessage.error(msg)
   } finally {
@@ -138,12 +138,12 @@ async function handleCreate() {
   creating.value = true
   try {
     const role = await rolesApi.create({ name: createForm.name, description: createForm.description })
-    ElMessage.success(`Role "${role.name}" created`)
+    ElMessage.success(`角色“${role.name}”已创建`)
     dialogVisible.value = false
     resetForm()
     roles.value.push(role)
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Creation failed'
+    const msg = err instanceof Error ? err.message : '创建失败'
     ElMessage.error(msg)
   } finally {
     creating.value = false
@@ -153,9 +153,9 @@ async function handleCreate() {
 async function handleDelete(role: Role) {
   try {
     await ElMessageBox.confirm(
-      `Delete role "${role.name}"? This action cannot be undone.`,
-      'Confirm Delete',
-      { confirmButtonText: 'Delete', cancelButtonText: 'Cancel', type: 'warning' },
+      `确认删除角色“${role.name}”吗？此操作不可撤销。`,
+      '确认删除',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
     )
   } catch {
     return
@@ -163,10 +163,10 @@ async function handleDelete(role: Role) {
 
   try {
     await rolesApi.remove(role.id)
-    ElMessage.success(`Role "${role.name}" deleted`)
+    ElMessage.success(`角色“${role.name}”已删除`)
     roles.value = roles.value.filter((r) => r.id !== role.id)
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Delete failed'
+    const msg = err instanceof Error ? err.message : '删除失败'
     ElMessage.error(msg)
   }
 }

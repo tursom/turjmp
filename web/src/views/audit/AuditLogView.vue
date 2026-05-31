@@ -1,11 +1,11 @@
 <template>
   <div class="page-container">
-    <h2>Audit Logs</h2>
+    <h2>审计日志</h2>
 
     <div class="filter-bar">
       <el-input
         v-model="filters.search"
-        placeholder="Search action, resource, address, detail..."
+        placeholder="搜索动作、资源、地址或详情..."
         clearable
         class="search-input"
         @input="resetPage"
@@ -16,13 +16,13 @@
         v-model="filters.userId"
         :min="1"
         controls-position="right"
-        placeholder="User ID"
+        placeholder="用户 ID"
         class="user-filter"
         @change="applyFilters"
       />
       <el-select
         v-model="filters.action"
-        placeholder="All actions"
+        placeholder="全部动作"
         clearable
         class="action-filter"
         @change="applyFilters"
@@ -37,13 +37,13 @@
       <el-date-picker
         v-model="filters.dateRange"
         type="daterange"
-        start-placeholder="Start date"
-        end-placeholder="End date"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
         value-format="YYYY-MM-DD"
         class="date-filter"
         @change="applyFilters"
       />
-      <el-button type="primary" @click="applyFilters">Search</el-button>
+      <el-button type="primary" @click="applyFilters">搜索</el-button>
     </div>
 
     <!-- Loading -->
@@ -53,16 +53,16 @@
 
     <!-- Error -->
     <div v-else-if="error" class="error-container">
-      <el-result icon="error" title="Failed to load audit logs" :sub-title="error">
+      <el-result icon="error" title="加载审计日志失败" :sub-title="error">
         <template #extra>
-          <el-button type="primary" @click="loadAuditLogs">Retry</el-button>
+          <el-button type="primary" @click="loadAuditLogs">重试</el-button>
         </template>
       </el-result>
     </div>
 
     <!-- Empty -->
     <div v-else-if="logs.length === 0" class="empty-container">
-      <el-empty description="No audit logs found" />
+      <el-empty description="未找到审计日志" />
     </div>
 
     <!-- Table -->
@@ -74,19 +74,19 @@
       style="width: 100%"
     >
       <el-table-column prop="id" label="ID" width="80" sortable />
-      <el-table-column prop="user_id" label="User ID" width="100">
+      <el-table-column prop="user_id" label="用户 ID" width="100">
         <template #default="{ row }">
           {{ row.user_id ?? '-' }}
         </template>
       </el-table-column>
-      <el-table-column prop="action" label="Action" min-width="160">
+      <el-table-column prop="action" label="动作" min-width="160">
         <template #default="{ row }">
           <el-tag size="small">{{ row.action }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="resource" label="Resource" min-width="180" />
-      <el-table-column prop="remote_addr" label="Remote Addr" width="150" />
-      <el-table-column label="Detail" min-width="200">
+      <el-table-column prop="resource" label="资源" min-width="180" />
+      <el-table-column prop="remote_addr" label="远端地址" width="150" />
+      <el-table-column label="详情" min-width="200">
         <template #default="{ row }">
           <el-tooltip
             :content="formatDetail(row.detail)"
@@ -98,7 +98,7 @@
           </el-tooltip>
         </template>
       </el-table-column>
-      <el-table-column label="Created At" min-width="180">
+      <el-table-column label="创建时间" min-width="180">
         <template #default="{ row }">
           {{ formatDate(row.created_at) }}
         </template>
@@ -200,7 +200,7 @@ async function loadAuditLogs() {
     logs.value = result.items
     total.value = result.total
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to load audit logs'
+    const msg = err instanceof Error ? err.message : '加载审计日志失败'
     error.value = msg
   } finally {
     loading.value = false

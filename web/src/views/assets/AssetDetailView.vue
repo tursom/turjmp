@@ -2,43 +2,43 @@
   <div class="page-container">
     <div class="page-header">
       <div class="header-left">
-        <el-button @click="handleBack">← Back</el-button>
+        <el-button @click="handleBack">← 返回</el-button>
         <h2 v-if="asset">{{ asset.name }}</h2>
-        <h2 v-else>Asset Detail</h2>
+        <h2 v-else>资产详情</h2>
       </div>
-      <el-button v-if="canUpdateAssets" type="primary" @click="handleEdit">Edit</el-button>
+      <el-button v-if="canUpdateAssets" type="primary" @click="handleEdit">编辑</el-button>
     </div>
 
     <el-tabs v-model="activeTab">
-      <el-tab-pane label="Information" name="info">
+      <el-tab-pane label="基本信息" name="info">
         <el-descriptions v-if="asset" :column="2" border class="info-descriptions">
-          <el-descriptions-item label="Name">{{ asset.name }}</el-descriptions-item>
-          <el-descriptions-item label="Address">{{ asset.address }}</el-descriptions-item>
-          <el-descriptions-item label="Platform">
+          <el-descriptions-item label="名称">{{ asset.name }}</el-descriptions-item>
+          <el-descriptions-item label="地址">{{ asset.address }}</el-descriptions-item>
+          <el-descriptions-item label="平台">
             {{ platformName }}
           </el-descriptions-item>
-          <el-descriptions-item label="Node">
+          <el-descriptions-item label="节点">
             {{ nodeName || '—' }}
           </el-descriptions-item>
-          <el-descriptions-item label="Comment">
+          <el-descriptions-item label="备注">
             {{ asset.comment || '—' }}
           </el-descriptions-item>
-          <el-descriptions-item label="Status">
+          <el-descriptions-item label="状态">
             <el-tag :type="asset.is_active ? 'success' : 'info'" size="small">
-              {{ asset.is_active ? 'Active' : 'Inactive' }}
+              {{ asset.is_active ? '活跃' : '停用' }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="Created">
+          <el-descriptions-item label="创建时间">
             {{ formatDate(asset.created_at) }}
           </el-descriptions-item>
-          <el-descriptions-item label="Updated">
+          <el-descriptions-item label="更新时间">
             {{ formatDate(asset.updated_at) }}
           </el-descriptions-item>
         </el-descriptions>
         <el-skeleton v-else :rows="8" animated />
       </el-tab-pane>
 
-      <el-tab-pane label="Accounts" name="accounts">
+      <el-tab-pane label="账号" name="accounts">
         <AccountManagement
           v-if="asset"
           :asset-id="asset.id"
@@ -46,17 +46,17 @@
         />
       </el-tab-pane>
 
-      <el-tab-pane label="Protocols" name="protocols">
+      <el-tab-pane label="协议" name="protocols">
         <el-table
           v-loading="protocolsLoading"
           :data="protocols"
           stripe
           border
-          empty-text="No protocol configuration found"
+          empty-text="未找到协议配置"
         >
-          <el-table-column prop="name" label="Protocol" min-width="140" />
-          <el-table-column prop="port" label="Port" width="120" />
-          <el-table-column label="Settings" min-width="240">
+          <el-table-column prop="name" label="协议" min-width="140" />
+          <el-table-column prop="port" label="端口" width="120" />
+          <el-table-column label="设置" min-width="240">
             <template #default="{ row }">
               <code>{{ row.settings || '{}' }}</code>
             </template>
@@ -128,7 +128,7 @@ async function loadData() {
     nodes.value = treeData.nodes
     await loadProtocols(assetData.platform_id)
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Failed to load asset')
+    ElMessage.error(err instanceof Error ? err.message : '加载资产失败')
     router.push('/assets')
   }
 }
@@ -139,7 +139,7 @@ async function loadProtocols(platformId: number) {
     protocols.value = await assetsApi.listPlatformProtocols(platformId)
   } catch (err) {
     protocols.value = []
-    ElMessage.error(err instanceof Error ? err.message : 'Failed to load protocols')
+    ElMessage.error(err instanceof Error ? err.message : '加载协议失败')
   } finally {
     protocolsLoading.value = false
   }

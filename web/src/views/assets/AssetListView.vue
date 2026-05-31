@@ -1,9 +1,9 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2>Assets</h2>
+      <h2>资产</h2>
       <el-button v-if="canCreateAssets" type="primary" @click="handleCreate">
-        New Asset
+        新建资产
       </el-button>
     </div>
 
@@ -12,8 +12,8 @@
         <el-card shadow="never" class="tree-card">
           <template #header>
             <div class="tree-header">
-              <span>Asset Tree</span>
-              <el-button link type="primary" @click="fetchAssetTree">Refresh</el-button>
+              <span>资产树</span>
+              <el-button link type="primary" @click="fetchAssetTree">刷新</el-button>
             </div>
           </template>
           <AssetTree
@@ -24,7 +24,7 @@
           />
           <el-skeleton v-else :rows="6" animated />
           <div v-if="selectedTreeLabel" class="tree-selection">
-            Selected: {{ selectedTreeLabel }}
+            当前选择：{{ selectedTreeLabel }}
           </div>
         </el-card>
       </el-col>
@@ -33,14 +33,14 @@
         <div class="toolbar">
           <el-input
             v-model="searchQuery"
-            placeholder="Search by name or address..."
+            placeholder="按名称或地址搜索..."
             clearable
             class="search-input"
             @input="applyFilters"
           />
           <el-select
             v-model="platformFilter"
-            placeholder="All protocols"
+            placeholder="全部协议"
             clearable
             class="filter-select"
             @change="applyFilters"
@@ -54,13 +54,13 @@
           </el-select>
           <el-select
             v-model="statusFilter"
-            placeholder="All statuses"
+            placeholder="全部状态"
             class="filter-select"
             @change="applyFilters"
           >
-            <el-option label="All statuses" value="all" />
-            <el-option label="Active" value="active" />
-            <el-option label="Inactive" value="inactive" />
+            <el-option label="全部状态" value="all" />
+            <el-option label="活跃" value="active" />
+            <el-option label="停用" value="inactive" />
           </el-select>
         </div>
 
@@ -69,34 +69,34 @@
           :data="assets"
           stripe
           border
-          empty-text="No assets found"
+          empty-text="未找到资产"
         >
-          <el-table-column prop="name" label="Name" min-width="140" />
-          <el-table-column prop="address" label="Address" min-width="160" />
-          <el-table-column prop="platform_name" label="Platform" min-width="120" />
-          <el-table-column prop="platform_type" label="Type" width="120" />
-          <el-table-column label="Status" width="100">
+          <el-table-column prop="name" label="名称" min-width="140" />
+          <el-table-column prop="address" label="地址" min-width="160" />
+          <el-table-column prop="platform_name" label="平台" min-width="120" />
+          <el-table-column prop="platform_type" label="类型" width="120" />
+          <el-table-column label="状态" width="100">
             <template #default="{ row }">
               <el-tag :type="row.is_active ? 'success' : 'info'" size="small">
-                {{ row.is_active ? 'Active' : 'Inactive' }}
+                {{ row.is_active ? '活跃' : '停用' }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="Created" width="180">
+          <el-table-column label="创建时间" width="180">
             <template #default="{ row }">
               {{ formatDate(row.created_at) }}
             </template>
           </el-table-column>
-          <el-table-column label="Actions" width="200" fixed="right">
+          <el-table-column label="操作" width="200" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" @click="handleView(row.id)">View</el-button>
+              <el-button size="small" @click="handleView(row.id)">查看</el-button>
               <el-button
                 v-if="canUpdateAssets"
                 size="small"
                 type="primary"
                 @click="handleEdit(row.id)"
               >
-                Edit
+                编辑
               </el-button>
               <el-button
                 v-if="canDeleteAssets"
@@ -104,7 +104,7 @@
                 type="danger"
                 @click="handleDelete(row)"
               >
-                Delete
+                删除
               </el-button>
             </template>
           </el-table-column>
@@ -124,7 +124,7 @@
 
         <el-empty
           v-if="!loading && total === 0"
-          description="No assets yet. Create your first asset."
+          description="暂无资产，请创建第一个资产。"
         />
       </el-col>
     </el-row>
@@ -187,7 +187,7 @@ async function fetchAssets() {
     assets.value = result.items
     total.value = result.total
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Failed to load assets')
+    ElMessage.error(err instanceof Error ? err.message : '加载资产失败')
   } finally {
     loading.value = false
   }
@@ -197,7 +197,7 @@ async function fetchPlatforms() {
   try {
     platforms.value = await assetsApi.listPlatforms()
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Failed to load platforms')
+    ElMessage.error(err instanceof Error ? err.message : '加载平台模板失败')
   }
 }
 
@@ -205,7 +205,7 @@ async function fetchAssetTree() {
   try {
     assetTree.value = await assetsApi.getTree()
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Failed to load asset tree')
+    ElMessage.error(err instanceof Error ? err.message : '加载资产树失败')
   }
 }
 
@@ -236,21 +236,21 @@ function handleEdit(id: number) {
 async function handleDelete(row: AssetWithPlatform) {
   try {
     await ElMessageBox.confirm(
-      `Delete asset "${row.name}"? This action cannot be undone.`,
-      'Confirm Delete',
+      `确认删除资产“${row.name}”吗？此操作不可撤销。`,
+      '确认删除',
       {
-        confirmButtonText: 'Delete',
-        cancelButtonText: 'Cancel',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
         type: 'warning',
       },
     )
     await assetsApi.remove(row.id)
-    ElMessage.success('Asset deleted')
+    ElMessage.success('资产已删除')
     await fetchAssets()
     await fetchAssetTree()
   } catch (err) {
     if (err !== 'cancel' && err !== 'close') {
-      ElMessage.error(err instanceof Error ? err.message : 'Delete failed')
+      ElMessage.error(err instanceof Error ? err.message : '删除失败')
     }
   }
 }

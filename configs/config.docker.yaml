@@ -1,0 +1,52 @@
+app:
+  name: Turjmp
+  environment: docker
+http:
+  addr: ":8080"
+  shutdown_timeout_seconds: 30
+database:
+  driver: sqlite
+  dsn: "file:/data/turjmp.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
+  migrations_dir: migrations/sqlite
+security:
+  encryption_key: "dev-only-change-me-32-byte-secret"
+  password_min_length: 8
+jwt:
+  private_key_path: "/keys/jwt_private.pem"
+  public_key_path: "/keys/jwt_public.pem"
+  access_ttl_seconds: 900
+  refresh_ttl_seconds: 604800
+proxy_auth:
+  secret: "dev-proxy-secret"
+  allowed_ips:
+    - "127.0.0.1"
+    - "::1"
+proxy:
+  api_base_url: "http://127.0.0.1:8080"
+  ssh:
+    addr: ":2222"
+    max_connections: 100
+    idle_timeout_seconds: 900
+    connect_timeout_seconds: 15
+  db:
+    mysql_addr: ":3307"
+    postgres_addr: ":5437"
+    max_connections: 50
+    idle_timeout_seconds: 1800
+    connect_timeout_seconds: 15
+    usql_path: "usql"
+  rdp:
+    addr: ":33891"
+    guacd_addr: "guacd:4822"
+    recording_path: "/recordings/rdp-tmp"
+    max_connections: 20
+    idle_timeout_seconds: 3600
+    connect_timeout_seconds: 15
+totp:
+  issuer: "Turjmp"
+logging:
+  level: debug
+  encoding: console
+rate_limit:
+  enabled: true
+  requests_per_second: 20

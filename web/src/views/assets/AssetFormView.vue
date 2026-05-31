@@ -1,7 +1,7 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2>{{ isEdit ? 'Edit Asset' : 'New Asset' }}</h2>
+      <h2>{{ isEdit ? '编辑资产' : '新建资产' }}</h2>
     </div>
 
     <el-form
@@ -11,18 +11,18 @@
       label-width="140px"
       class="asset-form"
     >
-      <el-form-item label="Name" prop="name">
-        <el-input v-model="form.name" placeholder="Asset name" maxlength="128" />
+      <el-form-item label="名称" prop="name">
+        <el-input v-model="form.name" placeholder="资产名称" maxlength="128" />
       </el-form-item>
 
-      <el-form-item label="Address" prop="address">
-        <el-input v-model="form.address" placeholder="IP or hostname" maxlength="256" />
+      <el-form-item label="地址" prop="address">
+        <el-input v-model="form.address" placeholder="IP 或主机名" maxlength="256" />
       </el-form-item>
 
-      <el-form-item label="Platform" prop="platform_id">
+      <el-form-item label="平台" prop="platform_id">
         <el-select
           v-model="form.platform_id"
-          placeholder="Select platform"
+          placeholder="选择平台"
           class="full-width"
         >
           <el-option
@@ -34,37 +34,37 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item label="Node">
+      <el-form-item label="节点">
         <el-tree-select
           v-model="form.node_id"
           :data="treeNodes"
           :props="{ label: 'label', children: 'children' }"
-          placeholder="Select node (optional)"
+          placeholder="选择节点（可选）"
           check-strictly
           clearable
           class="full-width"
         />
       </el-form-item>
 
-      <el-form-item label="Comment">
+      <el-form-item label="备注">
         <el-input
           v-model="form.comment"
           type="textarea"
           :rows="3"
-          placeholder="Optional comment"
+          placeholder="可选备注"
           maxlength="512"
         />
       </el-form-item>
 
-      <el-form-item label="Active">
+      <el-form-item label="活跃">
         <el-switch v-model="form.is_active" />
       </el-form-item>
 
       <el-form-item>
         <el-button type="primary" :loading="submitting" @click="handleSubmit">
-          {{ isEdit ? 'Update' : 'Create' }}
+          {{ isEdit ? '更新' : '创建' }}
         </el-button>
-        <el-button @click="handleCancel">Cancel</el-button>
+        <el-button @click="handleCancel">取消</el-button>
       </el-form-item>
     </el-form>
   </div>
@@ -113,9 +113,9 @@ const form = reactive<FormData>({
 })
 
 const rules: FormRules = {
-  name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
-  address: [{ required: true, message: 'Address is required', trigger: 'blur' }],
-  platform_id: [{ required: true, message: 'Platform is required', trigger: 'change' }],
+  name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
+  address: [{ required: true, message: '请输入地址', trigger: 'blur' }],
+  platform_id: [{ required: true, message: '请选择平台', trigger: 'change' }],
 }
 
 interface TreeNode {
@@ -165,7 +165,7 @@ async function loadOptions() {
     platforms.value = platData
     allNodes.value = treeData.nodes
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Failed to load data')
+    ElMessage.error(err instanceof Error ? err.message : '加载数据失败')
   } finally {
     loading.value = false
   }
@@ -182,7 +182,7 @@ async function loadAsset() {
     form.comment = asset.comment ?? ''
     form.is_active = asset.is_active
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Failed to load asset')
+    ElMessage.error(err instanceof Error ? err.message : '加载资产失败')
     router.push('/assets')
   }
 }
@@ -204,14 +204,14 @@ async function handleSubmit() {
 
     if (isEdit.value && assetId.value != null) {
       await assetsApi.update(assetId.value, payload)
-      ElMessage.success('Asset updated')
+      ElMessage.success('资产已更新')
     } else {
       await assetsApi.create(payload)
-      ElMessage.success('Asset created')
+      ElMessage.success('资产已创建')
     }
     router.push('/assets')
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Save failed')
+    ElMessage.error(err instanceof Error ? err.message : '保存失败')
   } finally {
     submitting.value = false
   }

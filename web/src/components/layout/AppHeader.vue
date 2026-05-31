@@ -35,12 +35,12 @@ function handleCommand(command: string) {
   <div class="header-right">
     <el-dropdown @command="handleCommand">
       <span class="user-info">
-        {{ authStore.user?.name || authStore.user?.username || 'User' }}
+        {{ authStore.user?.name || authStore.user?.username || '用户' }}
       </span>
       <template #dropdown>
         <el-dropdown-menu>
-          <el-dropdown-item command="mfa">MFA Setup</el-dropdown-item>
-          <el-dropdown-item command="logout">Logout</el-dropdown-item>
+          <el-dropdown-item command="mfa">MFA 设置</el-dropdown-item>
+          <el-dropdown-item command="logout">退出登录</el-dropdown-item>
         </el-dropdown-menu>
       </template>
     </el-dropdown>

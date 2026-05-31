@@ -35,12 +35,12 @@ function processQueue(error: unknown, token: string | null = null) {
 
 function errorMessage(error: unknown): string {
   if (!axios.isAxiosError(error)) {
-    return error instanceof Error ? error.message : 'Request failed'
+    return error instanceof Error ? error.message : '请求失败'
   }
   if (error.response?.data?.error?.message) {
     return error.response.data.error.message
   }
-  return error.response?.data?.message || error.message || 'Unknown error'
+  return error.response?.data?.message || error.message || '未知错误'
 }
 
 function isLoginRequest(config: RetriableRequestConfig): boolean {
@@ -79,7 +79,7 @@ client.interceptors.response.use(
     const originalRequest = error.config as RetriableRequestConfig
 
     if (!originalRequest) {
-      return Promise.reject(new Error(error.message || 'Request failed'))
+      return Promise.reject(new Error(error.message || '请求失败'))
     }
 
     if (error.response?.status === 401) {
@@ -89,13 +89,13 @@ client.interceptors.response.use(
 
       if (originalRequest.url?.includes('/auth/refresh') || originalRequest._retry) {
         clearAuthAndRedirect()
-        return Promise.reject(new Error('Session expired'))
+        return Promise.reject(new Error('会话已过期'))
       }
 
       const refreshTokenValue = localStorage.getItem('refresh_token')
       if (!refreshTokenValue) {
         clearAuthAndRedirect()
-        return Promise.reject(new Error('No refresh token'))
+        return Promise.reject(new Error('缺少刷新 Token'))
       }
 
       originalRequest._retry = true
@@ -125,7 +125,7 @@ client.interceptors.response.use(
         processQueue(refreshError, null)
         clearAuthAndRedirect()
         return Promise.reject(
-          refreshError instanceof Error ? refreshError : new Error('Token refresh failed'),
+          refreshError instanceof Error ? refreshError : new Error('Token 刷新失败'),
         )
       } finally {
         isRefreshing = false

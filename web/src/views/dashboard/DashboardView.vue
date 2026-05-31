@@ -1,6 +1,6 @@
 <template>
   <div class="page-container">
-    <h2>Dashboard</h2>
+    <h2>仪表盘</h2>
 
     <!-- Loading state -->
     <div v-if="loading" class="loading-container">
@@ -9,9 +9,9 @@
 
     <!-- Error state -->
     <div v-else-if="error" class="error-container">
-      <el-result icon="error" title="Failed to load dashboard data" :sub-title="error">
+      <el-result icon="error" title="加载仪表盘数据失败" :sub-title="error">
         <template #extra>
-          <el-button type="primary" @click="loadData">Retry</el-button>
+          <el-button type="primary" @click="loadData">重试</el-button>
         </template>
       </el-result>
     </div>
@@ -27,7 +27,7 @@
                 <el-icon :size="28"><Monitor /></el-icon>
               </div>
               <div class="stat-info">
-                <div class="stat-label">Total Assets</div>
+                <div class="stat-label">资产总数</div>
                 <div class="stat-value">{{ totalAssets }}</div>
               </div>
             </div>
@@ -40,7 +40,7 @@
                 <el-icon :size="28"><Connection /></el-icon>
               </div>
               <div class="stat-info">
-                <div class="stat-label">Active Sessions</div>
+                <div class="stat-label">活跃会话</div>
                 <div class="stat-value">{{ activeSessions }}</div>
               </div>
             </div>
@@ -53,7 +53,7 @@
                 <el-icon :size="28"><Clock /></el-icon>
               </div>
               <div class="stat-info">
-                <div class="stat-label">Today's Sessions</div>
+                <div class="stat-label">今日会话</div>
                 <div class="stat-value">{{ todaySessions }}</div>
               </div>
             </div>
@@ -66,7 +66,7 @@
                 <el-icon :size="28"><UserFilled /></el-icon>
               </div>
               <div class="stat-info">
-                <div class="stat-label">Active Users</div>
+                <div class="stat-label">活跃用户</div>
                 <div class="stat-value">{{ uniqueUsers }}</div>
               </div>
             </div>
@@ -78,26 +78,26 @@
       <el-card class="section-card" shadow="hover">
         <template #header>
           <div class="section-header">
-            <span>Recent Sessions</span>
+            <span>最近会话</span>
             <el-button type="primary" link @click="$router.push('/sessions')">
-              View All
+              查看全部
             </el-button>
           </div>
         </template>
         <el-table :data="recentSessions" stripe style="width: 100%">
           <el-table-column prop="id" label="ID" width="80" />
-          <el-table-column prop="user_id" label="User" width="100" />
-          <el-table-column prop="asset_id" label="Asset" width="100" />
-          <el-table-column prop="protocol" label="Protocol" width="120" />
-          <el-table-column label="Started" min-width="180">
+          <el-table-column prop="user_id" label="用户" width="100" />
+          <el-table-column prop="asset_id" label="资产" width="100" />
+          <el-table-column prop="protocol" label="协议" width="120" />
+          <el-table-column label="开始时间" min-width="180">
             <template #default="{ row }">
               {{ formatDate(row.date_start) }}
             </template>
           </el-table-column>
-          <el-table-column label="Status" width="110">
+          <el-table-column label="状态" width="110">
             <template #default="{ row }">
               <el-tag :type="row.is_finished ? 'info' : 'success'" size="small">
-                {{ row.is_finished ? 'Ended' : 'Active' }}
+                {{ row.is_finished ? '已结束' : '活跃' }}
               </el-tag>
             </template>
           </el-table-column>
@@ -107,7 +107,7 @@
       <!-- Connection token -->
       <el-card v-if="canIssueConnectionTokens" class="section-card" shadow="hover">
         <template #header>
-          <span>Generate Connection Token</span>
+          <span>生成连接 Token</span>
         </template>
         <el-form
           ref="tokenFormRef"
@@ -118,28 +118,28 @@
         >
           <el-row :gutter="20">
             <el-col :span="8">
-              <el-form-item label="Asset ID" prop="asset_id">
+              <el-form-item label="资产 ID" prop="asset_id">
                 <el-input-number
                   v-model="tokenForm.asset_id"
                   :min="1"
-                  placeholder="Asset ID"
+                  placeholder="资产 ID"
                   style="width: 100%"
                 />
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="Account ID" prop="account_id">
+              <el-form-item label="账号 ID" prop="account_id">
                 <el-input-number
                   v-model="tokenForm.account_id"
                   :min="1"
-                  placeholder="Account ID"
+                  placeholder="账号 ID"
                   style="width: 100%"
                 />
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="Protocol" prop="protocol">
-                <el-select v-model="tokenForm.protocol" placeholder="Select protocol" style="width: 100%">
+              <el-form-item label="协议" prop="protocol">
+                <el-select v-model="tokenForm.protocol" placeholder="选择协议" style="width: 100%">
                   <el-option label="SSH" value="ssh" />
                   <el-option label="RDP" value="rdp" />
                   <el-option label="VNC" value="vnc" />
@@ -153,10 +153,10 @@
           </el-row>
           <el-row :gutter="20">
             <el-col :span="12">
-              <el-form-item label="Connect Method">
+              <el-form-item label="连接方式">
                 <el-select
                   v-model="tokenForm.connect_method"
-                  placeholder="Optional"
+                  placeholder="可选"
                   clearable
                   style="width: 100%"
                 >
@@ -166,7 +166,7 @@
               </el-form-item>
             </el-col>
             <el-col :span="12">
-              <el-form-item label="Reusable">
+              <el-form-item label="可复用">
                 <el-switch v-model="tokenForm.is_reusable" />
               </el-form-item>
             </el-col>
@@ -177,14 +177,14 @@
               native-type="submit"
               :loading="tokenLoading"
             >
-              Generate Token
+              生成 Token
             </el-button>
           </el-form-item>
         </el-form>
 
         <div v-if="tokenResult" class="token-result">
           <el-alert
-            title="Connection Token Generated"
+            title="连接 Token 已生成"
             type="success"
             :closable="false"
             show-icon
@@ -204,7 +204,7 @@
                 </el-input>
               </div>
               <p class="token-expires">
-                Expires: {{ formatDate(tokenResult.expires_at) }}
+                过期时间：{{ formatDate(tokenResult.expires_at) }}
               </p>
             </template>
           </el-alert>
@@ -264,7 +264,7 @@ async function loadData(showLoading = true) {
     uniqueUsers.value = summary.active_users
     recentSessions.value = summary.recent_sessions
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to load dashboard data'
+    const msg = err instanceof Error ? err.message : '加载仪表盘数据失败'
     if (showLoading) {
       error.value = msg
     }
@@ -289,8 +289,8 @@ const tokenForm = reactive({
 })
 
 const tokenRules: FormRules = {
-  asset_id: [{ required: true, message: 'Asset ID is required', trigger: 'blur' }],
-  account_id: [{ required: true, message: 'Account ID is required', trigger: 'blur' }],
+  asset_id: [{ required: true, message: '请输入资产 ID', trigger: 'blur' }],
+  account_id: [{ required: true, message: '请输入账号 ID', trigger: 'blur' }],
 }
 
 async function handleGenerateToken() {
@@ -312,9 +312,9 @@ async function handleGenerateToken() {
       is_reusable: tokenForm.is_reusable,
     })
     tokenResult.value = result
-    ElMessage.success('Token generated')
+    ElMessage.success('Token 已生成')
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to generate token'
+    const msg = err instanceof Error ? err.message : '生成 Token 失败'
     ElMessage.error(msg)
   } finally {
     tokenLoading.value = false
@@ -325,9 +325,9 @@ async function copyToken() {
   if (!tokenResult.value) return
   try {
     await navigator.clipboard.writeText(tokenResult.value.token)
-    ElMessage.success('Token copied to clipboard')
+    ElMessage.success('Token 已复制到剪贴板')
   } catch {
-    ElMessage.warning('Failed to copy to clipboard')
+    ElMessage.warning('复制到剪贴板失败')
   }
 }
 

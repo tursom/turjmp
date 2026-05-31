@@ -1,16 +1,16 @@
 <template>
   <div class="page-container">
-    <h2>Sessions</h2>
+    <h2>会话</h2>
 
     <div class="filter-bar">
       <el-radio-group v-model="statusFilter" @change="onFilterChange">
-        <el-radio-button label="all">All Sessions</el-radio-button>
-        <el-radio-button label="active">Active</el-radio-button>
-        <el-radio-button label="ended">Ended</el-radio-button>
+        <el-radio-button label="all">全部会话</el-radio-button>
+        <el-radio-button label="active">活跃</el-radio-button>
+        <el-radio-button label="ended">已结束</el-radio-button>
       </el-radio-group>
       <el-input
         v-model="searchQuery"
-        placeholder="Search protocol, source, or IDs..."
+        placeholder="搜索协议、来源或 ID..."
         clearable
         class="search-input"
         @keyup.enter="onFilterChange"
@@ -20,7 +20,7 @@
         v-model="userFilter"
         :min="1"
         controls-position="right"
-        placeholder="User ID"
+        placeholder="用户 ID"
         class="id-filter"
         @change="onFilterChange"
       />
@@ -28,20 +28,20 @@
         v-model="assetFilter"
         :min="1"
         controls-position="right"
-        placeholder="Asset ID"
+        placeholder="资产 ID"
         class="id-filter"
         @change="onFilterChange"
       />
       <el-date-picker
         v-model="dateRange"
         type="daterange"
-        start-placeholder="Start date"
-        end-placeholder="End date"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
         value-format="YYYY-MM-DD"
         class="date-filter"
         @change="onFilterChange"
       />
-      <el-button type="primary" @click="onFilterChange">Search</el-button>
+      <el-button type="primary" @click="onFilterChange">搜索</el-button>
     </div>
 
     <!-- Loading -->
@@ -51,18 +51,18 @@
 
     <!-- Error -->
     <div v-else-if="error" class="error-container">
-      <el-result icon="error" title="Failed to load sessions" :sub-title="error">
+      <el-result icon="error" title="加载会话失败" :sub-title="error">
         <template #extra>
-          <el-button type="primary" @click="loadSessions">Retry</el-button>
+          <el-button type="primary" @click="loadSessions">重试</el-button>
         </template>
       </el-result>
     </div>
 
     <!-- Empty -->
     <div v-else-if="sessions.length === 0" class="empty-container">
-      <el-empty description="No sessions found">
+      <el-empty description="未找到会话">
         <el-button v-if="statusFilter !== 'all'" @click="statusFilter = 'all'">
-          Show All
+          显示全部
         </el-button>
       </el-empty>
     </div>
@@ -76,37 +76,37 @@
       style="width: 100%"
     >
       <el-table-column prop="id" label="ID" width="80" sortable />
-      <el-table-column prop="user_id" label="User ID" width="100" />
-      <el-table-column prop="asset_id" label="Asset ID" width="100" />
-      <el-table-column prop="protocol" label="Protocol" width="110" />
-      <el-table-column prop="type" label="Type" width="100" />
-      <el-table-column prop="login_from" label="Login From" width="130">
+      <el-table-column prop="user_id" label="用户 ID" width="100" />
+      <el-table-column prop="asset_id" label="资产 ID" width="100" />
+      <el-table-column prop="protocol" label="协议" width="110" />
+      <el-table-column prop="type" label="类型" width="100" />
+      <el-table-column prop="login_from" label="登录来源" width="130">
         <template #default="{ row }">
           <el-tag size="small" type="info">{{ row.login_from }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="remote_addr" label="Remote Addr" width="150" />
-      <el-table-column label="Status" width="110">
+      <el-table-column prop="remote_addr" label="远端地址" width="150" />
+      <el-table-column label="状态" width="110">
         <template #default="{ row }">
           <el-tag :type="row.is_finished ? 'info' : 'success'" size="small">
-            {{ row.is_finished ? 'Ended' : 'Active' }}
+            {{ row.is_finished ? '已结束' : '活跃' }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="Date Start" min-width="180">
+      <el-table-column label="开始时间" min-width="180">
         <template #default="{ row }">
           {{ formatDate(row.date_start) }}
         </template>
       </el-table-column>
-      <el-table-column label="Date End" min-width="180">
+      <el-table-column label="结束时间" min-width="180">
         <template #default="{ row }">
           {{ row.date_end ? formatDate(row.date_end) : '-' }}
         </template>
       </el-table-column>
-      <el-table-column label="Actions" width="180" fixed="right">
+      <el-table-column label="操作" width="180" fixed="right">
         <template #default="{ row }">
           <el-button type="primary" link @click="$router.push(`/sessions/${row.id}`)">
-            Detail
+            详情
           </el-button>
           <el-button
             v-if="canForceFinish && !row.is_finished"
@@ -114,7 +114,7 @@
             link
             @click="handleForceFinish(row)"
           >
-            Disconnect
+            断开
           </el-button>
         </template>
       </el-table-column>
@@ -170,7 +170,7 @@ async function loadSessions() {
       date_to: dateTo || undefined,
     })
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to load sessions'
+    const msg = err instanceof Error ? err.message : '加载会话失败'
     error.value = msg
   } finally {
     loading.value = false
@@ -209,7 +209,7 @@ async function connectSessionStream() {
     if (generation === streamGeneration) {
       if (!streamWarningShown) {
         streamWarningShown = true
-        ElMessage.warning(err instanceof Error ? err.message : 'Session stream unavailable')
+        ElMessage.warning(err instanceof Error ? err.message : '会话实时流不可用')
       }
       scheduleSessionStreamReconnect()
     }
@@ -253,9 +253,9 @@ function scheduleSessionStreamReconnect() {
 async function handleForceFinish(session: Session) {
   try {
     await ElMessageBox.confirm(
-      `Force disconnect session #${session.id}?`,
-      'Confirm Disconnect',
-      { confirmButtonText: 'Disconnect', cancelButtonText: 'Cancel', type: 'warning' },
+      `确认强制断开会话 #${session.id} 吗？`,
+      '确认断开',
+      { confirmButtonText: '断开', cancelButtonText: '取消', type: 'warning' },
     )
   } catch {
     return
@@ -263,9 +263,9 @@ async function handleForceFinish(session: Session) {
   try {
     const updated = await sessionsApi.forceFinish(session.id)
     sessions.value = sessions.value.map((item) => (item.id === updated.id ? updated : item))
-    ElMessage.success(`Session #${session.id} marked as disconnected`)
+    ElMessage.success(`会话 #${session.id} 已标记为断开`)
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Failed to disconnect session')
+    ElMessage.error(err instanceof Error ? err.message : '断开会话失败')
   }
 }
 

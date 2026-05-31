@@ -1,12 +1,12 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2>{{ isEdit ? 'Edit User' : 'New User' }}</h2>
+      <h2>{{ isEdit ? '编辑用户' : '新建用户' }}</h2>
     </div>
 
     <div v-if="loadingUser" class="page-loading">
       <el-icon class="is-loading" :size="24"><Loading /></el-icon>
-      <span>Loading user data...</span>
+      <span>正在加载用户数据...</span>
     </div>
 
     <el-form
@@ -18,19 +18,19 @@
       class="user-form"
       @submit.prevent="handleSubmit"
     >
-      <el-form-item label="Username" prop="username">
-        <el-input v-model="form.username" placeholder="Enter username" />
+      <el-form-item label="用户名" prop="username">
+        <el-input v-model="form.username" placeholder="输入用户名" />
       </el-form-item>
 
-      <el-form-item label="Name" prop="name">
-        <el-input v-model="form.name" placeholder="Enter full name" />
+      <el-form-item label="姓名" prop="name">
+        <el-input v-model="form.name" placeholder="输入姓名" />
       </el-form-item>
 
-      <el-form-item label="Email" prop="email">
-        <el-input v-model="form.email" placeholder="Enter email" />
+      <el-form-item label="邮箱" prop="email">
+        <el-input v-model="form.email" placeholder="输入邮箱" />
       </el-form-item>
 
-      <el-form-item label="Password" :prop="isEdit ? 'password' : 'password'">
+      <el-form-item label="密码" :prop="isEdit ? 'password' : 'password'">
         <el-input
           v-model="form.password"
           type="password"
@@ -39,16 +39,16 @@
         />
       </el-form-item>
 
-      <el-form-item label="Status">
-        <el-switch v-model="form.is_active" active-text="Active" inactive-text="Inactive" />
+      <el-form-item label="状态">
+        <el-switch v-model="form.is_active" active-text="活跃" inactive-text="停用" />
       </el-form-item>
 
-      <el-form-item label="Roles">
+      <el-form-item label="角色">
         <el-select
           v-model="form.role_ids"
           multiple
           filterable
-          placeholder="Select roles"
+          placeholder="选择角色"
           style="width: 100%"
         >
           <el-option
@@ -62,9 +62,9 @@
 
       <el-form-item>
         <el-button type="primary" native-type="submit" :loading="submitting">
-          {{ isEdit ? 'Update' : 'Create' }}
+          {{ isEdit ? '更新' : '创建' }}
         </el-button>
-        <el-button @click="goBack">Cancel</el-button>
+        <el-button @click="goBack">取消</el-button>
       </el-form-item>
     </el-form>
   </div>
@@ -103,29 +103,29 @@ const form = reactive({
 
 const passwordPlaceholder = computed(() =>
   isEdit.value
-    ? `Leave empty to keep current (min ${passwordMinLength.value} if changed)`
-    : `Enter password, min ${passwordMinLength.value} characters`,
+    ? `留空则保持当前密码不变（修改时至少 ${passwordMinLength.value} 个字符）`
+    : `输入密码，至少 ${passwordMinLength.value} 个字符`,
 )
 
 const rules = computed<FormRules>(() => ({
   username: [
-    { required: true, message: 'Username is required', trigger: 'blur' },
-    { min: 3, message: 'Username must be at least 3 characters', trigger: 'blur' },
+    { required: true, message: '请输入用户名', trigger: 'blur' },
+    { min: 3, message: '用户名至少需要 3 个字符', trigger: 'blur' },
   ],
-  name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
+  name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
   email: [
-    { required: true, message: 'Email is required', trigger: 'blur' },
-    { type: 'email', message: 'Enter a valid email', trigger: 'blur' },
+    { required: true, message: '请输入邮箱', trigger: 'blur' },
+    { type: 'email', message: '请输入有效邮箱', trigger: 'blur' },
   ],
   password: [
     {
       validator: (_rule, value: string, callback) => {
         if (!isEdit.value && !value) {
-          callback(new Error('Password is required'))
+          callback(new Error('请输入密码'))
           return
         }
         if (value && value.length < passwordMinLength.value) {
-          callback(new Error(`Password must be at least ${passwordMinLength.value} characters`))
+          callback(new Error(`密码至少需要 ${passwordMinLength.value} 个字符`))
           return
         }
         callback()
@@ -156,7 +156,7 @@ async function fetchRoles() {
   try {
     roles.value = await rolesApi.list()
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to load roles'
+    const msg = err instanceof Error ? err.message : '加载角色失败'
     ElMessage.error(msg)
   }
 }
@@ -173,7 +173,7 @@ async function fetchUser() {
     form.password = ''
     form.role_ids = detail.roles.map((r) => r.id)
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to load user'
+    const msg = err instanceof Error ? err.message : '加载用户失败'
     ElMessage.error(msg)
   } finally {
     loadingUser.value = false
@@ -203,22 +203,22 @@ async function handleSubmit() {
       // Don't send password if empty (no change)
       if (!payload.password) delete payload.password
       await usersApi.update(userId.value, payload)
-      ElMessage.success('User updated successfully')
+      ElMessage.success('用户已更新')
     } else {
       const createPayload = {
         ...payload,
       }
       if (!createPayload.password) {
-        ElMessage.error('Password is required')
+        ElMessage.error('请输入密码')
         submitting.value = false
         return
       }
       await usersApi.create(createPayload as { username: string; name: string; email: string; password: string; is_active: boolean; role_ids: number[] })
-      ElMessage.success('User created successfully')
+      ElMessage.success('用户已创建')
     }
     router.push('/users')
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Save failed'
+    const msg = err instanceof Error ? err.message : '保存失败'
     ElMessage.error(msg)
   } finally {
     submitting.value = false

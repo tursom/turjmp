@@ -31,7 +31,8 @@ assert(
 assert(
   dashboardView.includes('canIssueConnectionTokens') &&
     dashboardView.includes("authStore.canAccess('connection_tokens')") &&
-    /<el-card\s+v-if="canIssueConnectionTokens"[\s\S]*Generate Connection Token/.test(dashboardView),
+    /<el-card\s+v-if="canIssueConnectionTokens"[\s\S]*tokenFormRef/.test(dashboardView) &&
+    /<el-button[\s\S]*native-type="submit"[\s\S]*tokenLoading/.test(dashboardView),
   'dashboard connection token card must be gated by connection_tokens access',
 )
 

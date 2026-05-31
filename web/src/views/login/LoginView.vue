@@ -4,7 +4,7 @@
       <div class="login-header">
         <img src="/favicon.svg" class="login-logo" alt="Turjmp" />
         <h1 class="login-title">Turjmp</h1>
-        <p class="login-subtitle">Bastion Host Management</p>
+        <p class="login-subtitle">堡垒机管理平台</p>
       </div>
       <el-form
         ref="formRef"
@@ -15,7 +15,7 @@
         <el-form-item prop="username">
           <el-input
             v-model="form.username"
-            placeholder="Username"
+            placeholder="用户名"
             :prefix-icon="UserIcon"
             size="large"
           />
@@ -24,7 +24,7 @@
           <el-input
             v-model="form.password"
             type="password"
-            placeholder="Password"
+            placeholder="密码"
             :prefix-icon="LockIcon"
             show-password
             size="large"
@@ -32,7 +32,7 @@
         </el-form-item>
         <el-alert
           v-if="mfaRequired"
-          title="MFA verification required"
+          title="需要 MFA 验证"
           type="info"
           :closable="false"
           class="mfa-alert"
@@ -40,7 +40,7 @@
         <el-form-item v-if="mfaRequired" prop="mfaCode">
           <el-input
             v-model="form.mfaCode"
-            placeholder="MFA Code"
+            placeholder="MFA 验证码"
             :prefix-icon="KeyIcon"
             maxlength="6"
             size="large"
@@ -54,7 +54,7 @@
             size="large"
             class="login-btn"
           >
-            {{ authStore.loginLoading ? 'Signing in...' : (mfaRequired ? 'Verify & Sign In' : 'Sign In') }}
+            {{ authStore.loginLoading ? '登录中...' : (mfaRequired ? '验证并登录' : '登录') }}
           </el-button>
         </el-form-item>
       </el-form>
@@ -85,20 +85,20 @@ const LockIcon = Lock
 const KeyIcon = Key
 
 const rules: FormRules = {
-  username: [{ required: true, message: 'Username is required', trigger: 'blur' }],
+  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [
-    { required: true, message: 'Password is required', trigger: 'blur' },
-    { min: 6, message: 'Password must be at least 6 characters', trigger: 'blur' },
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    { min: 6, message: '密码至少需要 6 个字符', trigger: 'blur' },
   ],
   mfaCode: [
     {
       validator: (_rule, value: string, callback) => {
         if (mfaRequired.value && !value) {
-          callback(new Error('MFA code is required'))
+          callback(new Error('请输入 MFA 验证码'))
           return
         }
         if (value && !/^\d{6}$/.test(value)) {
-          callback(new Error('MFA code must be 6 digits'))
+          callback(new Error('MFA 验证码必须是 6 位数字'))
           return
         }
         callback()
@@ -126,16 +126,16 @@ async function handleLogin() {
     if (result.require_mfa) {
       mfaRequired.value = true
       form.mfaCode = ''
-      ElMessage.info('Enter your MFA code to continue')
+      ElMessage.info('请输入 MFA 验证码后继续')
       return
     }
     if (result.require_mfa_setup) {
-      ElMessage.info('MFA setup is required before continuing')
+      ElMessage.info('继续使用前需要先完成 MFA 设置')
       return
     }
-    ElMessage.success('Login successful')
+    ElMessage.success('登录成功')
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Login failed'
+    const msg = err instanceof Error ? err.message : '登录失败'
     ElMessage.error(msg)
   }
 }
