@@ -289,7 +289,7 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any, dst a
 		if envelope.Error != nil {
 			return fmt.Errorf("%s: %s", envelope.Error.Code, envelope.Error.Message)
 		}
-		return fmt.Errorf("proxy api returned status %d", resp.StatusCode)
+		return fmt.Errorf("代理 API 返回状态码 %d", resp.StatusCode)
 	}
 	if dst == nil {
 		return nil

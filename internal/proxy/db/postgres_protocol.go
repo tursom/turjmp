@@ -77,7 +77,7 @@ func (r *postgresCancelRegistry) forward(ctx context.Context, req *pgproto3.Canc
 	target, ok := r.entries[key]
 	r.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("postgres cancel target not found")
+		return fmt.Errorf("PostgreSQL 取消目标未找到")
 	}
 	timeout := r.timeout
 	if timeout <= 0 {
@@ -190,7 +190,7 @@ func postgresError(err *pgproto3.ErrorResponse) error {
 	if err.Message != "" {
 		return fmt.Errorf("%s", err.Message)
 	}
-	return fmt.Errorf("postgres error")
+	return fmt.Errorf("PostgreSQL 错误")
 }
 
 // postgresCancelBytes 构造 PostgreSQL CancelRequest 的二进制数据包。

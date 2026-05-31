@@ -114,7 +114,7 @@ func readMySQLPacket(conn net.Conn) ([]byte, byte, error) {
 	length := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
 	seq := header[3]
 	if length > mysqlMaxPacketSize {
-		return nil, seq, fmt.Errorf("mysql packet too large: %d", length)
+		return nil, seq, fmt.Errorf("MySQL 数据包过大：%d", length)
 	}
 	payload := make([]byte, length)
 	if _, err := io.ReadFull(conn, payload); err != nil {
@@ -127,7 +127,7 @@ func readMySQLPacket(conn net.Conn) ([]byte, byte, error) {
 // 自动构建 4 字节头部（3 字节长度 + 1 字节序列号）。
 func writeMySQLPacket(conn net.Conn, seq byte, payload []byte) error {
 	if len(payload) > mysqlMaxPacketSize {
-		return fmt.Errorf("mysql packet too large: %d", len(payload))
+		return fmt.Errorf("MySQL 数据包过大：%d", len(payload))
 	}
 	packet := make([]byte, 4+len(payload))
 	packet[0] = byte(len(payload))
@@ -199,20 +199,20 @@ func writeHandshake(conn net.Conn) error {
 //	变长（null 结尾）数据库名（仅当 CLIENT_CONNECT_WITH_DB 标志置位）
 func parseHandshakeResponse(payload []byte) (handshakeResponse, error) {
 	if len(payload) < 32 {
-		return handshakeResponse{}, fmt.Errorf("short mysql handshake response")
+		return handshakeResponse{}, fmt.Errorf("MySQL 握手响应过短")
 	}
 	flags := binary.LittleEndian.Uint32(payload[:4]) // 客户端能力标志
 	pos := 4 + 4 + 1 + 23                             // 跳过：caps(4) + maxPacket(4) + charset(1) + reserved(23)
 	// 读取用户名（null 结尾字符串）
 	username, next, ok := readNullString(payload, pos)
 	if !ok {
-		return handshakeResponse{}, fmt.Errorf("missing mysql username")
+		return handshakeResponse{}, fmt.Errorf("缺少 MySQL 用户名")
 	}
 	pos = next
 	// 读取认证响应（密码）
 	authResp, next, ok := readAuthResponse(payload, pos, flags)
 	if !ok {
-		return handshakeResponse{}, fmt.Errorf("invalid mysql auth response")
+		return handshakeResponse{}, fmt.Errorf("MySQL 认证响应无效")
 	}
 	pos = next
 	var database string

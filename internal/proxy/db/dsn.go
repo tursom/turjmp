@@ -69,7 +69,7 @@ func buildUSQLDSN(auth authResult) (string, error) {
 		query.Set("sslmode", "disable")
 		return formatURLDSN("postgres", auth.Account.Username, auth.Account.Secret, auth.Target.Address, port, auth.Account.DBName, query), nil
 	default:
-		return "", fmt.Errorf("unsupported db terminal protocol %s", auth.Target.Protocol)
+		return "", fmt.Errorf("不支持的数据库终端协议：%s", auth.Target.Protocol)
 	}
 }
 

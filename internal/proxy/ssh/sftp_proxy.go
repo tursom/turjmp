@@ -133,7 +133,7 @@ func (h *remoteSFTPHandlers) Filecmd(req *sftp.Request) error {
 		}
 		return nil
 	default:
-		return errors.New("unsupported sftp command: " + req.Method)
+		return errors.New("不支持的 SFTP 命令：" + req.Method)
 	}
 }
 
@@ -188,7 +188,7 @@ func (h *remoteSFTPHandlers) checkPath(p string) error {
 		deny = path.Clean("/" + strings.TrimPrefix(deny, "/"))
 		// 精确匹配或前缀匹配（子目录也禁止）
 		if cleaned == deny || strings.HasPrefix(cleaned, deny+"/") {
-			return errors.New("path denied by policy")
+			return errors.New("路径被策略拒绝")
 		}
 	}
 	return nil
@@ -273,22 +273,22 @@ type limitedSFTPWriter struct {
 // 如果写入后的文件大小超过 max，返回错误。
 func (w *limitedSFTPWriter) WriteAt(p []byte, off int64) (int, error) {
 	if off+int64(len(p)) > w.max {
-		return 0, errors.New("file exceeds configured max size")
+		return 0, errors.New("文件超出配置的最大大小")
 	}
 	return w.File.WriteAt(p, off)
 }
 
 // limitedSFTPRW 实现 SFTP 读写器的文件大小限制。
-// 同时支持限大小的写入和普通的读取操作。
+// 同时限制写入大小，读取不做限制。
 type limitedSFTPRW struct {
-	*sftp.File // 嵌入 SFTP 文件句柄
-	max int64  // 最大允许的文件大小
+	*sftp.File
+	max int64
 }
 
 // WriteAt 实现 io.WriterAt 接口，带文件大小限制检查。
 func (w *limitedSFTPRW) WriteAt(p []byte, off int64) (int, error) {
 	if off+int64(len(p)) > w.max {
-		return 0, errors.New("file exceeds configured max size")
+		return 0, errors.New("文件超出配置的最大大小")
 	}
 	return w.File.WriteAt(p, off)
 }

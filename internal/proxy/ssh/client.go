@@ -158,7 +158,7 @@ func buildAuthMethods(account targetAccount) ([]gossh.AuthMethod, error) {
 	case "password", "":
 		return []gossh.AuthMethod{gossh.Password(account.Secret)}, nil
 	default:
-		return nil, fmt.Errorf("unsupported secret_type %s", account.SecretType)
+		return nil, fmt.Errorf("不支持的凭据类型：%s", account.SecretType)
 	}
 }
 

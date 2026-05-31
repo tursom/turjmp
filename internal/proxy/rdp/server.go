@@ -106,8 +106,8 @@ func (s *Server) newWebSocketHandler() http.Handler {
 func (s *Server) connect(ws *websocket.Conn, r *http.Request) (guac.Tunnel, error) {
 	// 步骤1: 限流——获取会话槽位，超限则拒绝连接并释放 WebSocket
 	if !s.limit.acquire() {
-		_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "too many RDP sessions"), time.Now().Add(time.Second))
-		return nil, fmt.Errorf("too many RDP sessions")
+		_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "RDP 会话过多"), time.Now().Add(time.Second))
+		return nil, fmt.Errorf("RDP 会话过多")
 	}
 	// release 标志位：connect 中途失败时由 defer 释放限流槽位，成功时由 sessionTunnel.Close 接管
 	release := true
@@ -120,8 +120,8 @@ func (s *Server) connect(ws *websocket.Conn, r *http.Request) (guac.Tunnel, erro
 	// 步骤2: 提取 URL 中的 token 参数
 	token := r.URL.Query().Get("token")
 	if token == "" {
-		_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "token required"), time.Now().Add(time.Second))
-		return nil, fmt.Errorf("token required")
+		_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "需要连接令牌"), time.Now().Add(time.Second))
+		return nil, fmt.Errorf("需要连接令牌")
 	}
 
 	// 步骤3: 调用后端 API 验证 token，获取授权信息
@@ -195,13 +195,13 @@ func (s *Server) connect(ws *websocket.Conn, r *http.Request) (guac.Tunnel, erro
 // validateRDPAuth 校验 token 授权结果：协议必须为 RDP，且包含目标地址和用户名。
 func validateRDPAuth(auth authResult) error {
 	if !isRDPProtocol(auth.Target.Protocol) {
-		return fmt.Errorf("connection token protocol is not rdp")
+		return fmt.Errorf("连接令牌协议不是 RDP")
 	}
 	if auth.Target.Address == "" {
-		return fmt.Errorf("rdp target address required")
+		return fmt.Errorf("需要 RDP 目标地址")
 	}
 	if auth.Account.Username == "" {
-		return fmt.Errorf("rdp username required")
+		return fmt.Errorf("需要 RDP 用户名")
 	}
 	return nil
 }
