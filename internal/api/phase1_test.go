@@ -79,6 +79,32 @@ func TestPhase1RouterHealthAuthAndRBAC(t *testing.T) {
 	if forbidden.Code != http.StatusForbidden {
 		t.Fatalf("auditor assets status=%d body=%s", forbidden.Code, forbidden.Body.String())
 	}
+
+	operatorRole, err := env.store.GetRoleByName("operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.NewUserService(env.store, 8).Create(service.CreateUserInput{
+		Username: "operator",
+		Name:     "Operator",
+		Password: "operator123",
+		RoleIDs:  []int64{operatorRole.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	operatorToken := phase1Login(t, env.router, "operator", "operator123")
+	accessResp := phase1Request(t, env.router, http.MethodGet, "/api/v1/auth/access", nil, phase1AuthHeader(operatorToken))
+	if accessResp.Code != http.StatusOK {
+		t.Fatalf("operator access status=%d body=%s", accessResp.Code, accessResp.Body.String())
+	}
+	access := phase1DecodeData[struct {
+		Access map[string]bool `json:"access"`
+	}](t, accessResp)
+	for _, key := range []string{"connection_tokens", "assets", "accounts", "platforms", "platform_protocols"} {
+		if !access.Access[key] {
+			t.Fatalf("operator access[%s]=false, access=%#v", key, access.Access)
+		}
+	}
 }
 
 func TestPhase1UpdateRoleRenamesCasbinPolicies(t *testing.T) {
@@ -358,14 +384,17 @@ func TestPhase1RouterAssetsPermissionsTokensSettingsAndSessions(t *testing.T) {
 		t.Fatalf("dashboard summary status=%d body=%s", dashboardResp.Code, dashboardResp.Body.String())
 	}
 	dashboard := phase1DecodeData[struct {
-		TotalAssets    int              `json:"total_assets"`
-		ActiveSessions int              `json:"active_sessions"`
-		TodaySessions  int              `json:"today_sessions"`
-		ActiveUsers    int              `json:"active_users"`
-		RecentSessions []domain.Session `json:"recent_sessions"`
+		TotalAssets    int                     `json:"total_assets"`
+		ActiveSessions int                     `json:"active_sessions"`
+		TodaySessions  int                     `json:"today_sessions"`
+		ActiveUsers    int                     `json:"active_users"`
+		RecentSessions []domain.SessionSummary `json:"recent_sessions"`
 	}](t, dashboardResp)
 	if dashboard.TotalAssets < 2 || dashboard.ActiveSessions != 1 || dashboard.TodaySessions == 0 || dashboard.ActiveUsers != 1 || len(dashboard.RecentSessions) == 0 {
 		t.Fatalf("unexpected dashboard summary: %#v", dashboard)
+	}
+	if dashboard.RecentSessions[0].AssetName != asset.Name || dashboard.RecentSessions[0].AccountName != account.Name {
+		t.Fatalf("dashboard recent session missing names: %#v", dashboard.RecentSessions[0])
 	}
 	streamTokenResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/sessions/stream-token", nil, adminHeader)
 	if streamTokenResp.Code != http.StatusCreated {

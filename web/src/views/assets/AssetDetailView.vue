@@ -6,6 +6,9 @@
         <h2 v-if="asset">{{ asset.name }}</h2>
         <h2 v-else>资产详情</h2>
       </div>
+      <el-button v-if="canOpenTerminal && terminalProtocol" type="success" @click="handleWebTerminal">
+        Web 终端
+      </el-button>
       <el-button v-if="canUpdateAssets" type="primary" @click="handleEdit">编辑</el-button>
     </div>
 
@@ -61,6 +64,18 @@
               <code>{{ row.settings || '{}' }}</code>
             </template>
           </el-table-column>
+          <el-table-column label="终端" width="140">
+            <template #default="{ row }">
+              <el-button
+                v-if="canOpenTerminal && asset?.is_active && isSupportedWebTerminalProtocol(row.name)"
+                size="small"
+                type="success"
+                @click="handleProtocolTerminal(row.name)"
+              >
+                打开
+              </el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </el-tab-pane>
     </el-tabs>
@@ -75,6 +90,12 @@ import * as assetsApi from '@/api/assets'
 import type { Asset, Platform, Node, PlatformProtocol } from '@/types'
 import AccountManagement from './AccountManagement.vue'
 import { useAuthStore } from '@/stores/auth'
+import {
+  canUseWebTerminal,
+  isSupportedWebTerminalProtocol,
+  normalizeProtocol,
+  supportedWebTerminalProtocols,
+} from '@/utils/terminal'
 
 const route = useRoute()
 const router = useRouter()
@@ -87,6 +108,7 @@ const nodes = ref<Node[]>([])
 const protocols = ref<PlatformProtocol[]>([])
 const protocolsLoading = ref(false)
 const canUpdateAssets = computed(() => authStore.canAccess('asset_update'))
+const canOpenTerminal = computed(() => canUseWebTerminal(authStore.access))
 
 const assetId = computed(() => {
   const id = route.params.id
@@ -103,6 +125,12 @@ const platformType = computed(() => {
   if (!asset.value) return ''
   const p = platforms.value.find((pl) => pl.id === asset.value!.platform_id)
   return p?.type ?? ''
+})
+
+const supportedProtocols = computed(() => supportedWebTerminalProtocols(protocols.value))
+const terminalProtocol = computed(() => {
+  if (!asset.value?.is_active) return undefined
+  return normalizeProtocol(supportedProtocols.value[0]?.name) || undefined
 })
 
 const nodeName = computed(() => {
@@ -143,6 +171,18 @@ async function loadProtocols(platformId: number) {
   } finally {
     protocolsLoading.value = false
   }
+}
+
+function handleWebTerminal() {
+  if (!terminalProtocol.value) return
+  router.push(`/terminal?asset_id=${assetId.value}&protocol=${terminalProtocol.value}&auto_connect=1`)
+}
+
+function handleProtocolTerminal(protocol: string) {
+  if (!asset.value?.is_active) return
+  const normalized = normalizeProtocol(protocol)
+  if (!isSupportedWebTerminalProtocol(normalized)) return
+  router.push(`/terminal?asset_id=${assetId.value}&protocol=${normalized}&auto_connect=1`)
 }
 
 function handleEdit() {

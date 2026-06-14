@@ -17,7 +17,7 @@ import (
 // postgresProxy PostgreSQL 协议代理的核心管理结构体。
 // 它持有 API 客户端、连接限流器、超时配置和取消注册表，是整个代理生命周期的主控。
 type postgresProxy struct {
-	api            apiClient              // API 客户端，用于验证连接令牌和创建/结束会话
+	api            apiClient               // API 客户端，用于验证连接令牌和创建/结束会话
 	limit          *limiter                // 并发连接数限流器，控制同时代理的最大连接数
 	connectTimeout time.Duration           // 连接目标 PostgreSQL 的超时时间
 	idleTimeout    time.Duration           // 连接空闲超时时间（读/写无活动时断开）
@@ -28,12 +28,12 @@ type postgresProxy struct {
 // 它封装了底层 net.Conn、pgproto3 前端收发器以及连接的元信息，
 // 使代理可以透明地在客户端和真实 PG 之间中继消息。
 type postgresTarget struct {
-	conn              net.Conn             // 通过 pgconn Hijack 获取的原始 TCP 连接，用于双向透明中继
-	frontend          *pgproto3.Frontend   // pgproto3 前端收发器，用于向后端 PG 发送和接收 wire protocol 消息
-	processID         uint32               // 后端 PG 分配的后端进程 ID，用于 cancel 请求和 BackendKeyData
-	secretKey         []byte               // 后端 PG 分配的秘密密钥，配合 processID 完成 cancel 认证
-	parameterStatuses map[string]string    // 后端 PG 的参数状态（如 server_version、DateStyle 等），会转发给客户端
-	txStatus          byte                 // 当前事务状态字节，用于 ReadyForQuery 消息
+	conn              net.Conn           // 通过 pgconn Hijack 获取的原始 TCP 连接，用于双向透明中继
+	frontend          *pgproto3.Frontend // pgproto3 前端收发器，用于向后端 PG 发送和接收 wire protocol 消息
+	processID         uint32             // 后端 PG 分配的后端进程 ID，用于 cancel 请求和 BackendKeyData
+	secretKey         []byte             // 后端 PG 分配的秘密密钥，配合 processID 完成 cancel 认证
+	parameterStatuses map[string]string  // 后端 PG 的参数状态（如 server_version、DateStyle 等），会转发给客户端
+	txStatus          byte               // 当前事务状态字节，用于 ReadyForQuery 消息
 }
 
 // newPostgresProxy 创建新的 PostgreSQL 协议代理实例。
@@ -136,7 +136,7 @@ func (p *postgresProxy) handleConn(parent context.Context, raw net.Conn) {
 	}
 
 	// 阶段 3：验证连接令牌，获取授权信息（包含目标数据库连接参数）
-	auth, err := p.api.VerifyConnectionToken(ctx, token, remoteAddr)
+	auth, err := p.api.VerifyConnectionToken(ctx, token, remoteAddr, "postgres")
 	if err != nil {
 		_ = sendPostgresError(client, "28000", "token verification failed")
 		return
@@ -154,15 +154,7 @@ func (p *postgresProxy) handleConn(parent context.Context, raw net.Conn) {
 	}
 
 	// 阶段 4：创建代理会话记录（用于审计和会话管理）
-	session, err := p.api.CreateSession(ctx, sessionInfo{
-		UserID:        auth.UserID,
-		AssetID:       auth.AssetID,
-		AccountID:     auth.AccountID,
-		Protocol:      "postgres",
-		Type:          "db_proxy",
-		ConnectMethod: "postgres_client",
-		RemoteAddr:    remoteAddr,
-	})
+	session, err := p.api.CreateSession(ctx, dbSessionInfo(auth, "postgres", "postgres_client", remoteAddr))
 	if err != nil {
 		_ = sendPostgresError(client, "58000", "create db session failed")
 		return
@@ -171,6 +163,11 @@ func (p *postgresProxy) handleConn(parent context.Context, raw net.Conn) {
 	defer func() {
 		_ = p.api.FinishSession(context.Background(), session.SessionID)
 	}()
+	stopWatch := watchDBSessionFinish(ctx, p.api, session.SessionID, func() {
+		cancel()
+		_ = raw.Close()
+	})
+	defer stopWatch()
 
 	// 阶段 5：打开到目标 PostgreSQL 的连接
 	// 使用 pgconn 库建立连接，并通过 Hijack 获取底层 net.Conn 做透明中继
@@ -315,12 +312,12 @@ func (p *postgresProxy) openTarget(ctx context.Context, auth authResult, startup
 	}
 
 	return &postgresTarget{
-		conn:              hijacked.Conn,           // 原始 net.Conn，用于透明双向中继
-		frontend:          hijacked.Frontend,       // pgproto3 前端收发器，用于 protocol 级别的消息收发
-		processID:         hijacked.PID,            // 后端进程 ID
-		secretKey:         hijacked.SecretKey,      // 后端秘密密钥
+		conn:              hijacked.Conn,              // 原始 net.Conn，用于透明双向中继
+		frontend:          hijacked.Frontend,          // pgproto3 前端收发器，用于 protocol 级别的消息收发
+		processID:         hijacked.PID,               // 后端进程 ID
+		secretKey:         hijacked.SecretKey,         // 后端秘密密钥
 		parameterStatuses: hijacked.ParameterStatuses, // 后端参数状态（server_version 等）
-		txStatus:          txStatus,                // 当前事务状态
+		txStatus:          txStatus,                   // 当前事务状态
 	}, nil
 }
 

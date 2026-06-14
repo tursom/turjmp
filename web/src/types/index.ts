@@ -232,12 +232,19 @@ export interface Session {
   updated_at: string
 }
 
+export interface SessionSummary extends Session {
+  username?: string
+  user_name?: string
+  asset_name?: string
+  account_name?: string
+}
+
 export interface DashboardSummary {
   total_assets: number
   active_sessions: number
   today_sessions: number
   active_users: number
-  recent_sessions: Session[]
+  recent_sessions: SessionSummary[]
   generated_at: string
 }
 
@@ -352,6 +359,28 @@ export interface PermissionLinks {
 export interface PermissionDetail {
   permission: AssetPermission
   links: PermissionLinks
+}
+
+// Terminal
+export interface TerminalTabState {
+  id: string
+  assetId: number
+  assetName: string
+  accountId: number
+  accountName: string
+  protocol: string
+  platformType: string
+  connectMethod: string
+  status: 'connecting' | 'connected' | 'disconnected'
+  duration: number
+  connectedAt: string | null
+}
+
+export interface ConnectParams {
+  assetId: number
+  accountId: number
+  protocol: string
+  connectMethod: string
 }
 
 // API response envelope

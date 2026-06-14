@@ -40,12 +40,21 @@ func NewAPIClient(cfg config.Config) *APIClient {
 // 请求：POST /api/v1/authentication/super-connection-tokens/verify/
 // 参数：token（连接 token）和 remote_addr（客户端 IP）
 // 返回：包含目标数据库配置、账号凭据和用户/资产/账号 ID 的授权结果。
-func (c *APIClient) VerifyConnectionToken(ctx context.Context, token, remoteAddr string) (authResult, error) {
+func (c *APIClient) VerifyConnectionToken(ctx context.Context, token, remoteAddr, expectedProtocol string) (authResult, error) {
+	return c.verifyConnectionToken(ctx, token, remoteAddr, expectedProtocol, true)
+}
+
+func (c *APIClient) PreflightConnectionToken(ctx context.Context, token, remoteAddr, expectedProtocol string) (authResult, error) {
+	return c.verifyConnectionToken(ctx, token, remoteAddr, expectedProtocol, false)
+}
+
+func (c *APIClient) verifyConnectionToken(ctx context.Context, token, remoteAddr, expectedProtocol string, consume bool) (authResult, error) {
 	var out struct {
 		Token struct {
-			UserID    int64 `json:"user_id"`
-			AssetID   int64 `json:"asset_id"`
-			AccountID int64 `json:"account_id"`
+			UserID        int64  `json:"user_id"`
+			AssetID       int64  `json:"asset_id"`
+			AccountID     int64  `json:"account_id"`
+			ConnectMethod string `json:"connect_method"`
 		} `json:"token"`
 		Target  targetConfig `json:"target"`
 		Account struct {
@@ -55,9 +64,11 @@ func (c *APIClient) VerifyConnectionToken(ctx context.Context, token, remoteAddr
 			DBName     string `json:"db_name"`
 		} `json:"account"`
 	}
-	if err := c.post(ctx, "/api/v1/authentication/super-connection-tokens/verify/", map[string]string{
-		"token":       token,
-		"remote_addr": remoteAddr,
+	if err := c.post(ctx, "/api/v1/authentication/super-connection-tokens/verify/", map[string]any{
+		"token":             token,
+		"remote_addr":       remoteAddr,
+		"expected_protocol": expectedProtocol,
+		"consume":           consume,
 	}, &out); err != nil {
 		return authResult{}, err
 	}
@@ -73,9 +84,10 @@ func (c *APIClient) VerifyConnectionToken(ctx context.Context, token, remoteAddr
 			SecretType: out.Account.SecretType,
 			DBName:     out.Account.DBName,
 		},
-		UserID:    out.Token.UserID,
-		AssetID:   out.Token.AssetID,
-		AccountID: out.Token.AccountID,
+		UserID:        out.Token.UserID,
+		AssetID:       out.Token.AssetID,
+		AccountID:     out.Token.AccountID,
+		ConnectMethod: out.Token.ConnectMethod,
 	}, nil
 }
 
@@ -100,6 +112,35 @@ func (c *APIClient) CreateSession(ctx context.Context, session sessionInfo) (ses
 	}
 	session.SessionID = out.ID
 	return session, nil
+}
+
+// GetSession 查询会话当前状态，代理用它感知管理端强制断开操作。
+func (c *APIClient) GetSession(ctx context.Context, sessionID int64) (sessionInfo, error) {
+	var out struct {
+		ID         int64  `json:"id"`
+		UserID     int64  `json:"user_id"`
+		AssetID    int64  `json:"asset_id"`
+		AccountID  int64  `json:"account_id"`
+		Protocol   string `json:"protocol"`
+		Type       string `json:"type"`
+		LoginFrom  string `json:"login_from"`
+		RemoteAddr string `json:"remote_addr"`
+		IsFinished bool   `json:"is_finished"`
+	}
+	if err := c.get(ctx, fmt.Sprintf("/api/v1/proxy/sessions/%d", sessionID), &out); err != nil {
+		return sessionInfo{}, err
+	}
+	return sessionInfo{
+		UserID:        out.UserID,
+		AssetID:       out.AssetID,
+		AccountID:     out.AccountID,
+		Protocol:      out.Protocol,
+		Type:          out.Type,
+		ConnectMethod: out.LoginFrom,
+		RemoteAddr:    out.RemoteAddr,
+		SessionID:     out.ID,
+		IsFinished:    out.IsFinished,
+	}, nil
 }
 
 // FinishSession 标记会话已结束。

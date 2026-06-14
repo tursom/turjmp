@@ -62,9 +62,11 @@ func (c *APIClient) VerifyConnectionToken(ctx context.Context, token, remoteAddr
 			DBName      string `json:"db_name"`
 		} `json:"account"`
 	}
-	if err := c.post(ctx, "/api/v1/authentication/super-connection-tokens/verify/", map[string]string{
-		"token":       token,
-		"remote_addr": remoteAddr,
+	if err := c.post(ctx, "/api/v1/authentication/super-connection-tokens/verify/", map[string]any{
+		"token":             token,
+		"remote_addr":       remoteAddr,
+		"expected_protocol": "ssh",
+		"consume":           true,
 	}, &out); err != nil {
 		return targetAuthResult{}, err
 	}

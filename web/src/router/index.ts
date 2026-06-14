@@ -10,6 +10,7 @@ import {
   readStoredRoles,
 } from '@/utils/authStorage'
 import { applyDocumentTitle } from '@/utils/branding'
+import { canUseWebTerminal } from '@/utils/terminal'
 import type { AccessMap } from '@/types'
 
 const NO_ACCESS_PATH = '/403'
@@ -19,15 +20,21 @@ function hasAccess(required: string | undefined, access: AccessMap): boolean {
   return access[required] === true
 }
 
+function hasRouteAccess(required: string | undefined, access: AccessMap): boolean {
+  if (required === 'web_terminal') return canUseWebTerminal(access)
+  return hasAccess(required, access)
+}
+
 export function defaultRouteForAccess(access: AccessMap = readStoredAccess()): string {
   for (const route of ACCESSIBLE_ROUTE_FALLBACKS) {
-    if (hasAccess(route.access, access)) return route.path
+    if (hasRouteAccess(route.access, access)) return route.path
   }
   return NO_ACCESS_PATH
 }
 
 const ACCESSIBLE_ROUTE_FALLBACKS = [
   { path: '/dashboard', access: 'dashboard' },
+  { path: '/terminal', access: 'web_terminal' },
   { path: '/sessions', access: 'sessions' },
   { path: '/audit-logs', access: 'audit_logs' },
   { path: '/assets', access: 'assets' },
@@ -67,6 +74,20 @@ const routes = [
     path: '/mfa-setup',
     name: 'MFASetup',
     component: () => import('@/views/login/MFASetupView.vue'),
+  },
+  {
+    path: '/terminal',
+    name: 'Terminal',
+    component: () => import('@/components/layout/TerminalLayout.vue'),
+    meta: { title: 'Web 终端' },
+    children: [
+      {
+        path: '',
+        name: 'TerminalPage',
+        component: () => import('@/views/terminal/TerminalPage.vue'),
+        meta: { title: 'Web 终端', access: 'web_terminal' },
+      },
+    ],
   },
   {
     path: '/',
@@ -271,7 +292,7 @@ router.beforeEach(async (to) => {
 
   const access = await ensureAccess(token)
   const requiredAccess = to.meta?.access as string | undefined
-  if (!hasAccess(requiredAccess, access)) {
+  if (!hasRouteAccess(requiredAccess, access)) {
     const fallback = defaultRouteForAccess(access)
     if (fallback !== to.path) {
       return { path: fallback, replace: true }

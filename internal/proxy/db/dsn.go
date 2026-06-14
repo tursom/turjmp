@@ -13,6 +13,8 @@ import (
 	"time"
 
 	mysql "github.com/go-sql-driver/mysql"
+
+	"github.com/tursom/turjmp/internal/config"
 )
 
 // buildMySQLDSN 为 go-sql-driver/mysql 构建 DSN 连接字符串。
@@ -38,15 +40,15 @@ func buildMySQLDSN(auth authResult, timeout time.Duration) string {
 // 目标连接默认关闭 SSL，保持与 Web usql 终端一致的内网代理行为。
 func buildPostgresDSN(auth authResult, timeout time.Duration) string {
 	query := url.Values{}
-	query.Set("sslmode", "disable")                                                        // 关闭 SSL，与 Web usql 终端保持一致
+	query.Set("sslmode", "disable") // 关闭 SSL，与 Web usql 终端保持一致
 	if timeout > 0 {
-		seconds := int(timeout.Seconds())                                                  // 将 Duration 转为整数秒
+		seconds := int(timeout.Seconds()) // 将 Duration 转为整数秒
 		if seconds <= 0 {
-			seconds = 1                                                                    // 超时至少为 1 秒
+			seconds = 1 // 超时至少为 1 秒
 		}
-		query.Set("connect_timeout", strconv.Itoa(seconds))                                // 设置连接超时
+		query.Set("connect_timeout", strconv.Itoa(seconds)) // 设置连接超时
 	}
-	query.Set("application_name", "turjmp")                                                // 设置应用名称标识
+	query.Set("application_name", "turjmp")                                                                                                               // 设置应用名称标识
 	return formatURLDSN("postgres", auth.Account.Username, auth.Account.Secret, auth.Target.Address, targetPort(auth.Target), auth.Account.DBName, query) // 构建 PostgreSQL URL 连接字符串
 }
 
@@ -57,13 +59,13 @@ func buildPostgresDSN(auth authResult, timeout time.Duration) string {
 //   - MySQL:     mysql://user:pass@host:port/dbname
 //   - PostgreSQL: postgres://user:pass@host:port/dbname?sslmode=disable
 func buildUSQLDSN(auth authResult) (string, error) {
-	protocol := strings.ToLower(auth.Target.Protocol)
+	protocol := normalizeDBProtocol(auth.Target.Protocol)
 	port := targetPort(auth.Target)
 	switch protocol {
 	case "mysql":
 		// MySQL 不需要额外参数
 		return formatURLDSN("mysql", auth.Account.Username, auth.Account.Secret, auth.Target.Address, port, auth.Account.DBName, nil), nil
-	case "postgres", "postgresql":
+	case "postgres":
 		// PostgreSQL 禁用 SSL（内网代理场景）
 		query := url.Values{}
 		query.Set("sslmode", "disable")
@@ -73,6 +75,54 @@ func buildUSQLDSN(auth authResult) (string, error) {
 	}
 }
 
+// buildUSQLProxyDSN 为 Web 数据库终端构建指向本机数据库代理的 usql 连接串。
+// token 放在代理登录用户名中，由 MySQL/PostgreSQL 代理验证、创建会话并执行 SQL 审计。
+func buildUSQLProxyDSN(protocol, token string, cfg config.DBProxyConfig) (string, error) {
+	protocol = normalizeDBProtocol(protocol)
+	if token == "" {
+		return "", fmt.Errorf("connection token required")
+	}
+	username := "web#" + token
+	switch protocol {
+	case "mysql":
+		host, port, err := proxyListenHostPort(cfg.MySQLListenAddr(), 3307)
+		if err != nil {
+			return "", err
+		}
+		return formatURLDSN("mysql", username, "", host, port, "", nil), nil
+	case "postgres":
+		host, port, err := proxyListenHostPort(cfg.PostgresListenAddr(), 5437)
+		if err != nil {
+			return "", err
+		}
+		query := url.Values{}
+		query.Set("sslmode", "disable")
+		return formatURLDSN("postgres", username, "", host, port, "postgres", query), nil
+	default:
+		return "", fmt.Errorf("不支持的数据库终端协议：%s", protocol)
+	}
+}
+
+func proxyListenHostPort(addr string, defaultPort int) (string, int, error) {
+	host, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "missing port in address") {
+			host = addr
+			portText = strconv.Itoa(defaultPort)
+		} else {
+			return "", 0, err
+		}
+	}
+	if host == "" || host == "::" || host == "0.0.0.0" || host == "[::]" {
+		host = "127.0.0.1"
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port <= 0 {
+		return "", 0, fmt.Errorf("invalid proxy listen port %q", portText)
+	}
+	return host, port, nil
+}
+
 // formatURLDSN 是通用的 URL 格式 DSN 构建器。
 // 生成格式：scheme://username:password@host:port/dbname?query
 // 若用户名不为空则设置 UserInfo 认证信息。
@@ -80,10 +130,18 @@ func formatURLDSN(scheme, username, password, host string, port int, dbName stri
 	u := url.URL{
 		Scheme: scheme,                                     // 协议名（mysql / postgres）
 		Host:   net.JoinHostPort(host, strconv.Itoa(port)), // 主机:端口
-		Path:   "/" + dbName,                               // 数据库名
+	}
+	if dbName != "" {
+		u.Path = "/" + dbName // 数据库名
+	} else {
+		u.Path = "/"
 	}
 	if username != "" {
-		u.User = url.UserPassword(username, password)
+		if password == "" {
+			u.User = url.User(username)
+		} else {
+			u.User = url.UserPassword(username, password)
+		}
 	}
 	if len(query) > 0 {
 		u.RawQuery = query.Encode()

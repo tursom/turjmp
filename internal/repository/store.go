@@ -35,6 +35,15 @@ type AuditLogFilter struct {
 	Offset   int
 }
 
+// DashboardSummary 聚合仪表盘首页所需的轻量统计。
+type DashboardSummary struct {
+	TotalAssets    int
+	ActiveSessions int
+	TodaySessions  int
+	ActiveUsers    int
+	RecentSessions []domain.SessionSummary
+}
+
 // NewStore 创建 Store 实例。
 func NewStore(db *DB) *Store {
 	return &Store{db: db}
@@ -318,12 +327,30 @@ func (s *Store) GetAsset(id int64) (domain.Asset, error) {
 // 查询逻辑：JOIN platform_protocols 表，根据 asset_id 和 protocol name 获取端口
 func (s *Store) GetAssetProtocolPort(assetID int64, protocol string) (int, error) {
 	var port int
+	names := protocolAliases(protocol)
+	placeholders := make([]string, len(names))
+	args := make([]any, 0, len(names)+1)
+	args = append(args, assetID)
+	for i, name := range names {
+		placeholders[i] = "?"
+		args = append(args, name)
+	}
 	err := s.db.Get(&port, s.query(`SELECT pp.port
 		FROM assets a
 		JOIN platform_protocols pp ON pp.platform_id = a.platform_id
-		WHERE a.id = ? AND pp.name = ?
-		LIMIT 1`), assetID, protocol)
+		WHERE a.id = ? AND pp.name IN (`+strings.Join(placeholders, ",")+`)
+		LIMIT 1`), args...)
 	return port, notFound(err)
+}
+
+func protocolAliases(protocol string) []string {
+	protocol = strings.ToLower(strings.TrimSpace(protocol))
+	switch protocol {
+	case "postgres", "postgresql":
+		return []string{"postgres", "postgresql"}
+	default:
+		return []string{protocol}
+	}
 }
 
 // ListAssets 返回所有资产列表（含 JOIN 平台表获取平台名称和类型），按资产 ID 升序排列。
@@ -573,10 +600,14 @@ func (s *Store) GetConnectionToken(value string) (domain.ConnectionToken, error)
 	return t, notFound(err)
 }
 
-// MarkConnectionTokenUsed 标记连接令牌为已使用（设置 used_at 为当前时间）。
-func (s *Store) MarkConnectionTokenUsed(value string) error {
-	_, err := s.db.Exec(s.query(`UPDATE connection_tokens SET used_at = CURRENT_TIMESTAMP WHERE value = ?`), value)
-	return err
+// ConsumeConnectionToken 原子领取一次性连接令牌。只有未过期且未使用的非复用 token 会被标记 used_at 并返回。
+func (s *Store) ConsumeConnectionToken(value string) (domain.ConnectionToken, error) {
+	var t domain.ConnectionToken
+	q := s.query(`UPDATE connection_tokens SET used_at = CURRENT_TIMESTAMP
+		WHERE value = ? AND is_reusable = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+		RETURNING *`)
+	err := s.db.Get(&t, q, value, false)
+	return t, notFound(err)
 }
 
 // CreateSession 创建会话记录，INSERT 后通过 RETURNING * 返回完整记录。
@@ -607,6 +638,44 @@ func (s *Store) ListSessions() ([]domain.Session, error) {
 	var sessions []domain.Session
 	err := s.db.Select(&sessions, `SELECT * FROM sessions ORDER BY id DESC`)
 	return sessions, err
+}
+
+// DashboardSummary 返回仪表盘统计和最近会话，避免控制台周期性请求扫描全量会话数据。
+func (s *Store) DashboardSummary(todayStart time.Time, recentLimit int) (DashboardSummary, error) {
+	if recentLimit <= 0 {
+		recentLimit = 10
+	}
+	var out DashboardSummary
+	if err := s.db.Get(&out.TotalAssets, `SELECT COUNT(1) FROM assets`); err != nil {
+		return out, err
+	}
+	if err := s.db.Get(&out.ActiveSessions, `SELECT COUNT(1) FROM sessions WHERE is_finished = false`); err != nil {
+		return out, err
+	}
+	if err := s.db.Get(&out.TodaySessions, s.query(`SELECT COUNT(1) FROM sessions WHERE date_start >= ?`), todayStart); err != nil {
+		return out, err
+	}
+	if err := s.db.Get(&out.ActiveUsers, `SELECT COUNT(DISTINCT user_id) FROM sessions WHERE is_finished = false`); err != nil {
+		return out, err
+	}
+	q := s.query(`SELECT s.*,
+			u.username AS username,
+			u.name AS user_name,
+			a.name AS asset_name,
+			COALESCE(NULLIF(ac.name, ''), ac.username) AS account_name
+		FROM sessions s
+		LEFT JOIN users u ON u.id = s.user_id
+		LEFT JOIN assets a ON a.id = s.asset_id
+		LEFT JOIN accounts ac ON ac.id = s.account_id
+		ORDER BY s.id DESC
+		LIMIT ?`)
+	if err := s.db.Select(&out.RecentSessions, q, recentLimit); err != nil {
+		return out, err
+	}
+	if out.RecentSessions == nil {
+		out.RecentSessions = []domain.SessionSummary{}
+	}
+	return out, nil
 }
 
 // UpsertSetting 创建或更新系统设置项。

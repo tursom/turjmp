@@ -30,11 +30,12 @@ type targetAccount struct {
 // authResult 是 token 验证成功后返回的完整授权信息，
 // 包含目标数据库的连接配置、认证凭据以及用户/资产/账号标识。
 type authResult struct {
-	Target    targetConfig  // 目标数据库配置
-	Account   targetAccount // 目标数据库账号
-	UserID    int64         // 操作者用户 ID
-	AssetID   int64         // 资产 ID
-	AccountID int64         // 数据库账号 ID
+	Target        targetConfig  // 目标数据库配置
+	Account       targetAccount // 目标数据库账号
+	UserID        int64         // 操作者用户 ID
+	AssetID       int64         // 资产 ID
+	AccountID     int64         // 数据库账号 ID
+	ConnectMethod string        // 连接方式（web_db / mysql_client / postgres_client 等）
 }
 
 // sessionInfo 描述一个代理会话的元信息，用于创建/完成会话的 API 调用。
@@ -47,15 +48,20 @@ type sessionInfo struct {
 	ConnectMethod string // 连接方式（mysql_client / web_db）
 	RemoteAddr    string // 客户端远程地址
 	SessionID     int64  // 会话 ID（由 API 创建后返回）
+	IsFinished    bool   // 会话是否已被标记结束
 }
 
 // apiClient 定义与后端 JumpServer API 通信的接口。
 // 所有方法都接受 context.Context 以支持超时和取消。
 type apiClient interface {
 	// VerifyConnectionToken 验证客户端提交的连接 token，返回授权信息。
-	VerifyConnectionToken(ctx context.Context, token, remoteAddr string) (authResult, error)
+	VerifyConnectionToken(ctx context.Context, token, remoteAddr, expectedProtocol string) (authResult, error)
+	// PreflightConnectionToken 只验证 token 与期望协议，不消费一次性 token。
+	PreflightConnectionToken(ctx context.Context, token, remoteAddr, expectedProtocol string) (authResult, error)
 	// CreateSession 在审计系统中创建代理会话记录。
 	CreateSession(ctx context.Context, session sessionInfo) (sessionInfo, error)
+	// GetSession 查询代理会话当前状态，用于感知管理端强制结束。
+	GetSession(ctx context.Context, sessionID int64) (sessionInfo, error)
 	// FinishSession 标记会话已结束。
 	FinishSession(ctx context.Context, sessionID int64) error
 	// Audit 写入审计日志（SQL 审计）。
@@ -94,6 +100,24 @@ func (l *limiter) release() {
 	select {
 	case <-l.ch:
 	default:
+	}
+}
+
+func dbSessionInfo(auth authResult, protocol, nativeConnectMethod, remoteAddr string) sessionInfo {
+	sessionType := "db_proxy"
+	connectMethod := nativeConnectMethod
+	if auth.ConnectMethod == "web_db" {
+		sessionType = "db_terminal"
+		connectMethod = "web_db"
+	}
+	return sessionInfo{
+		UserID:        auth.UserID,
+		AssetID:       auth.AssetID,
+		AccountID:     auth.AccountID,
+		Protocol:      protocol,
+		Type:          sessionType,
+		ConnectMethod: connectMethod,
+		RemoteAddr:    remoteAddr,
 	}
 }
 
@@ -183,13 +207,22 @@ func safeRemoteAddr(addr net.Addr) string {
 // protocolDefaultPort 根据数据库协议名返回默认端口。
 // MySQL 默认 3306，PostgreSQL 默认 5432，其他返回 0。
 func protocolDefaultPort(protocol string) int {
-	switch strings.ToLower(protocol) {
+	switch normalizeDBProtocol(protocol) {
 	case "mysql":
 		return 3306
-	case "postgres", "postgresql":
+	case "postgres":
 		return 5432
 	default:
 		return 0
+	}
+}
+
+func normalizeDBProtocol(protocol string) string {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "postgresql":
+		return "postgres"
+	default:
+		return strings.ToLower(strings.TrimSpace(protocol))
 	}
 }
 

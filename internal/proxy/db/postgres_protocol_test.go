@@ -509,13 +509,23 @@ type testDBAPI struct {
 	verifyResult authResult
 	verifyErr    error
 	verifyTokens []string
+	expected     []string
 	sessions     []sessionInfo
 }
 
-func (a *testDBAPI) VerifyConnectionToken(_ context.Context, token, _ string) (authResult, error) {
+func (a *testDBAPI) VerifyConnectionToken(_ context.Context, token, _, expectedProtocol string) (authResult, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.verifyTokens = append(a.verifyTokens, token)
+	a.expected = append(a.expected, expectedProtocol)
+	return a.verifyResult, a.verifyErr
+}
+
+func (a *testDBAPI) PreflightConnectionToken(_ context.Context, token, _, expectedProtocol string) (authResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.verifyTokens = append(a.verifyTokens, token)
+	a.expected = append(a.expected, expectedProtocol)
 	return a.verifyResult, a.verifyErr
 }
 
@@ -529,6 +539,10 @@ func (a *testDBAPI) CreateSession(_ context.Context, session sessionInfo) (sessi
 
 func (a *testDBAPI) FinishSession(context.Context, int64) error {
 	return nil
+}
+
+func (a *testDBAPI) GetSession(context.Context, int64) (sessionInfo, error) {
+	return sessionInfo{}, nil
 }
 
 func (a *testDBAPI) Audit(_ context.Context, _ int64, _, _, _ string, detail string) error {

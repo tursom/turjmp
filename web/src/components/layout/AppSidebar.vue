@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Monitor, User, Setting, Lock, Connection, Document, Tools } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import { canUseWebTerminal } from '@/utils/terminal'
 
 defineProps<{
   collapse: boolean
@@ -18,6 +19,7 @@ interface MenuItem {
 
 const menuItems: MenuItem[] = [
   { index: '/dashboard', icon: Monitor, label: '仪表盘', access: 'dashboard' },
+  { index: '/terminal', icon: Connection, label: 'Web 终端', access: 'web_terminal' },
   { index: '/assets', icon: Monitor, label: '资产', access: 'assets' },
   { index: '/platforms', icon: Tools, label: '平台模板', access: 'platforms' },
   { index: '/users', icon: User, label: '用户', access: 'users' },
@@ -30,6 +32,7 @@ const menuItems: MenuItem[] = [
 
 function canShow(item: MenuItem): boolean {
   if (!item.access) return true
+  if (item.access === 'web_terminal') return canUseWebTerminal(authStore.access)
   return authStore.canAccess(item.access)
 }
 </script>

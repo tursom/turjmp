@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -24,8 +26,14 @@ import (
 // 桥接 WebSocket 和 SSH 之间的数据流。
 type WebTerminal struct {
 	cfg    config.Config // 代理配置
-	api    *APIClient    // API 客户端，用于令牌验证和会话管理
-	dialer *sshDialer    // SSH 拨号器，管理到目标资产的连接
+	api    apiClient     // API 客户端，用于令牌验证和会话管理
+	dialer webSSHDialer  // SSH 拨号器，管理到目标资产的连接
+}
+
+type webSSHDialer interface {
+	acquire() bool
+	release()
+	dialSSH(ctx context.Context, target targetConfig, account targetAccount) (*gossh.Client, error)
 }
 
 // NewWebTerminal 创建一个新的 WebSocket 终端处理器。
@@ -67,6 +75,10 @@ func (t *WebTerminal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close(websocket.StatusPolicyViolation, err.Error())
 		return
 	}
+	if strings.ToLower(auth.Target.Protocol) != "ssh" {
+		_ = conn.Close(websocket.StatusPolicyViolation, "connection token protocol is not ssh")
+		return
+	}
 	// 获取连接槽位
 	if !t.dialer.acquire() {
 		_ = conn.Close(websocket.StatusTryAgainLater, "too many connections")
@@ -80,6 +92,8 @@ func (t *WebTerminal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer client.Close()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	// 在 API 服务器上创建会话记录（连接方式标记为 web_cli）
 	session, err := t.api.CreateSession(ctx, targetSessionInfo{
 		UserID:        auth.UserID,
@@ -100,11 +114,14 @@ func (t *WebTerminal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		recBase = parseSettingString(raw, recBase)
 	}
 	recPath := filepath.Join(recBase, strconv.FormatInt(session.SessionID, 10)+".cast")
-	cast, _ := recorder.NewCastWriter(recPath, 80, 24)
+	cast, err := recorder.NewCastWriter(recPath, 80, 24)
+	if err != nil {
+		_ = conn.Close(websocket.StatusInternalError, fmt.Sprintf("create recording failed: %v", err))
+		_ = t.api.FinishSession(context.Background(), session.SessionID, "")
+		return
+	}
 	defer func() {
-		if cast != nil {
-			_ = cast.Close()
-		}
+		_ = cast.Close()
 		// 会话结束后通知 API 标记完成
 		_ = t.api.FinishSession(context.Background(), session.SessionID, recPath)
 	}()
@@ -116,11 +133,16 @@ func (t *WebTerminal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer sshSession.Close()
-	stopWatch := watchSessionFinish(ctx, t.api, session.SessionID, func() {
-		_ = sshSession.Close()
-		_ = client.Close()
-		_ = conn.Close(websocket.StatusNormalClosure, "session force finished")
-	})
+	var closeOnce sync.Once
+	closeSession := func() {
+		closeOnce.Do(func() {
+			cancel()
+			_ = sshSession.Close()
+			_ = client.Close()
+			_ = conn.Close(websocket.StatusNormalClosure, "")
+		})
+	}
+	stopWatch := watchSessionFinish(ctx, t.api, session.SessionID, closeSession)
 	defer stopWatch()
 	// 请求伪终端（使用 xterm-256color，初始大小 80x24）
 	if err := sshSession.RequestPty("xterm-256color", 24, 80, gossh.TerminalModes{}); err != nil {
@@ -136,15 +158,31 @@ func (t *WebTerminal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close(websocket.StatusInternalError, err.Error())
 		return
 	}
+	var bridgeWG sync.WaitGroup
 	// 启动三个 goroutine 桥接数据流：
 	// 1. SSH stdout -> 录像 -> WebSocket
-	go t.copySSHOutput(ctx, conn, stdout, cast)
+	bridgeWG.Add(1)
+	go func() {
+		defer bridgeWG.Done()
+		t.copySSHOutput(ctx, conn, stdout, cast)
+	}()
 	// 2. SSH stderr -> 录像 -> WebSocket
-	go t.copySSHOutput(ctx, conn, stderr, cast)
+	bridgeWG.Add(1)
+	go func() {
+		defer bridgeWG.Done()
+		t.copySSHOutput(ctx, conn, stderr, cast)
+	}()
 	// 3. WebSocket 用户输入 -> SSH stdin
-	go t.copyWSInput(ctx, conn, stdin, sshSession, cast)
+	bridgeWG.Add(1)
+	go func() {
+		defer bridgeWG.Done()
+		t.copyWSInput(ctx, conn, stdin, sshSession, cast)
+		closeSession()
+	}()
 	// 等待远程 Shell 结束
 	_ = sshSession.Wait()
+	closeSession()
+	bridgeWG.Wait()
 }
 
 // copySSHOutput 将 SSH 会话的输出复制到 WebSocket 连接。

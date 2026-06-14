@@ -75,6 +75,48 @@
       </el-row>
 
       <!-- Recent sessions -->
+      <el-card v-if="canOpenTerminal" class="section-card" shadow="hover">
+        <template #header>
+          <div class="section-header">
+            <span>最近访问资产</span>
+            <el-button type="primary" link @click="$router.push('/assets')">
+              资产列表
+            </el-button>
+          </div>
+        </template>
+        <el-table :data="recentAssets" stripe style="width: 100%" empty-text="暂无可快速连接的资产">
+          <el-table-column label="资产" min-width="180">
+            <template #default="{ row }">
+              <div class="entity-cell">
+                <span>{{ row.asset_name || `#${row.asset_id}` }}</span>
+                <small>#{{ row.asset_id }}</small>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="账号" min-width="140">
+            <template #default="{ row }">
+              <div class="entity-cell">
+                <span>{{ row.account_name || `#${row.account_id}` }}</span>
+                <small>#{{ row.account_id }}</small>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="protocol" label="协议" width="120" />
+          <el-table-column label="最近访问" min-width="180">
+            <template #default="{ row }">
+              {{ formatDate(row.date_start) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="120">
+            <template #default="{ row }">
+              <el-button type="success" link @click="openRecentAsset(row)">
+                Web 终端
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-card>
+
       <el-card class="section-card" shadow="hover">
         <template #header>
           <div class="section-header">
@@ -86,8 +128,22 @@
         </template>
         <el-table :data="recentSessions" stripe style="width: 100%">
           <el-table-column prop="id" label="ID" width="80" />
-          <el-table-column prop="user_id" label="用户" width="100" />
-          <el-table-column prop="asset_id" label="资产" width="100" />
+          <el-table-column label="用户" min-width="140">
+            <template #default="{ row }">
+              <div class="entity-cell">
+                <span>{{ row.user_name || row.username || `#${row.user_id}` }}</span>
+                <small>#{{ row.user_id }}</small>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="资产" min-width="160">
+            <template #default="{ row }">
+              <div class="entity-cell">
+                <span>{{ row.asset_name || `#${row.asset_id}` }}</span>
+                <small>#{{ row.asset_id }}</small>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column prop="protocol" label="协议" width="120" />
           <el-table-column label="开始时间" min-width="180">
             <template #default="{ row }">
@@ -99,6 +155,18 @@
               <el-tag :type="row.is_finished ? 'info' : 'success'" size="small">
                 {{ row.is_finished ? '已结束' : '活跃' }}
               </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="canIssueConnectionTokens" label="操作" width="120">
+            <template #default="{ row }">
+              <el-button
+                v-if="canOpenRecentSession(row)"
+                type="primary"
+                link
+                @click="openRecentSession(row)"
+              >
+                打开终端
+              </el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -231,24 +299,60 @@ import {
 import * as sessionsApi from '@/api/sessions'
 import * as tokensApi from '@/api/tokens'
 import { useAuthStore } from '@/stores/auth'
-import type { ConnectionTokenResult, Session } from '@/types'
+import type { ConnectionTokenResult, SessionSummary } from '@/types'
+import { canUseWebTerminal, isSupportedWebTerminalProtocol, normalizeProtocol } from '@/utils/terminal'
 
 const authStore = useAuthStore()
 const loading = ref(true)
 const error = ref<string | null>(null)
 const canIssueConnectionTokens = computed(() => authStore.canAccess('connection_tokens'))
+const canOpenTerminal = computed(() => canUseWebTerminal(authStore.access))
 
 const totalAssets = ref(0)
 const activeSessions = ref(0)
 const todaySessions = ref(0)
 const uniqueUsers = ref(0)
-const recentSessions = ref<Session[]>([])
+const recentSessions = ref<SessionSummary[]>([])
 let summaryTimer: ReturnType<typeof globalThis.setInterval> | undefined
+
+const recentAssets = computed(() => {
+  const seen = new Set<string>()
+  const items: SessionSummary[] = []
+  for (const session of recentSessions.value) {
+    const protocol = normalizeProtocol(session.protocol)
+    if (!isSupportedWebTerminalProtocol(protocol)) continue
+    const key = `${session.asset_id}:${session.account_id}:${protocol}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    items.push({ ...session, protocol })
+    if (items.length >= 5) break
+  }
+  return items
+})
 
 function formatDate(dateStr: string): string {
   if (!dateStr) return '-'
   const d = new Date(dateStr)
   return d.toLocaleString()
+}
+
+function canOpenRecentSession(session: SessionSummary): boolean {
+  return canOpenTerminal.value && isSupportedWebTerminalProtocol(session.protocol)
+}
+
+function openRecentSession(session: SessionSummary): void {
+  if (!canOpenRecentSession(session)) return
+  window.open(
+    `/terminal?asset_id=${session.asset_id}&account_id=${session.account_id}&protocol=${session.protocol}`,
+    '_blank',
+  )
+}
+
+function openRecentAsset(session: SessionSummary): void {
+  window.open(
+    `/terminal?asset_id=${session.asset_id}&account_id=${session.account_id}&protocol=${session.protocol}`,
+    '_blank',
+  )
 }
 
 async function loadData(showLoading = true) {
@@ -427,6 +531,17 @@ h2 {
   justify-content: space-between;
   font-size: 16px;
   font-weight: 600;
+}
+
+.entity-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.25;
+}
+
+.entity-cell small {
+  color: #909399;
 }
 
 .loading-container {

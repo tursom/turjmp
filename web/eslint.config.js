@@ -17,6 +17,14 @@ export default tseslint.config(
       },
       globals: {
         navigator: 'readonly',
+        window: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+        HTMLElement: 'readonly',
+        ResizeObserver: 'readonly',
+        BeforeUnloadEvent: 'readonly',
+        WebSocket: 'readonly',
+        crypto: 'readonly',
       },
     },
     rules: {

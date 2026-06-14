@@ -1,5 +1,6 @@
 bin/
 .turjmp/
+.codex-audit-loop/
 *.db
 *.db-shm
 *.db-wal

@@ -89,6 +89,14 @@
           </el-table-column>
           <el-table-column label="操作" width="200" fixed="right">
             <template #default="{ row }">
+              <el-button
+                v-if="canOpenTerminal && terminalProtocolForAsset(row)"
+                size="small"
+                type="success"
+                @click="handleWebTerminal(row)"
+              >
+                Web 终端
+              </el-button>
               <el-button size="small" @click="handleView(row.id)">查看</el-button>
               <el-button
                 v-if="canUpdateAssets"
@@ -138,7 +146,18 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import * as assetsApi from '@/api/assets'
 import { useAuthStore } from '@/stores/auth'
 import AssetTree from '@/components/asset-tree/AssetTree.vue'
-import type { AssetTreeData, AssetWithPlatform, Platform, Node as AssetNode } from '@/types'
+import type {
+  AssetTreeData,
+  AssetWithPlatform,
+  Platform,
+  PlatformProtocol,
+  Node as AssetNode,
+} from '@/types'
+import {
+  canUseWebTerminal,
+  normalizeProtocol,
+  supportedWebTerminalProtocols,
+} from '@/utils/terminal'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -146,6 +165,7 @@ const authStore = useAuthStore()
 const loading = ref(false)
 const assets = ref<AssetWithPlatform[]>([])
 const platforms = ref<Platform[]>([])
+const platformProtocols = ref<Record<number, PlatformProtocol[]>>({})
 const assetTree = ref<AssetTreeData | null>(null)
 const selectedTreeLabel = ref('')
 const total = ref(0)
@@ -158,6 +178,7 @@ const statusFilter = ref('all')
 const canCreateAssets = computed(() => authStore.canAccess('asset_create'))
 const canUpdateAssets = computed(() => authStore.canAccess('asset_update'))
 const canDeleteAssets = computed(() => authStore.canAccess('asset_delete'))
+const canOpenTerminal = computed(() => canUseWebTerminal(authStore.access))
 
 const platformTypes = computed(() => {
   const types = new Set(platforms.value.map((p) => p.type))
@@ -196,9 +217,22 @@ async function fetchAssets() {
 async function fetchPlatforms() {
   try {
     platforms.value = await assetsApi.listPlatforms()
+    await fetchPlatformProtocols()
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '加载平台模板失败')
   }
+}
+
+async function fetchPlatformProtocols() {
+  const entries = await Promise.all(
+    platforms.value.map(async (platform) => {
+      const protocols = supportedWebTerminalProtocols(
+        await assetsApi.listPlatformProtocols(platform.id),
+      )
+      return [platform.id, protocols] as const
+    }),
+  )
+  platformProtocols.value = Object.fromEntries(entries)
 }
 
 async function fetchAssetTree() {
@@ -216,6 +250,18 @@ function handleSizeChange() {
 
 function handleCreate() {
   router.push('/assets/new')
+}
+
+function terminalProtocolForAsset(asset: AssetWithPlatform): string | undefined {
+  if (!asset.is_active) return undefined
+  const protocols = platformProtocols.value[asset.platform_id] ?? []
+  return normalizeProtocol(protocols[0]?.name) || undefined
+}
+
+function handleWebTerminal(asset: AssetWithPlatform) {
+  const protocol = terminalProtocolForAsset(asset)
+  if (!protocol) return
+  router.push(`/terminal?asset_id=${asset.id}&protocol=${protocol}&auto_connect=1`)
 }
 
 function handleView(id: number) {

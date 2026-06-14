@@ -9,16 +9,16 @@ import "time"
 // 与 user_groups / asset_permissions 等表通过关联表建立多对多关系。
 type User struct {
 	ID           int64      `db:"id" json:"id"`
-	Username     string     `db:"username" json:"username"`           // 登录用户名，唯一标识
-	Name         string     `db:"name" json:"name"`                   // 用户显示名称
-	Email        string     `db:"email" json:"email"`                 // 邮箱地址
-	PasswordHash string     `db:"password_hash" json:"-"`             // bcrypt 密码哈希，JSON 序列化时隐藏
-	MFAEnabled   bool       `db:"mfa_enabled" json:"mfa_enabled"`     // 是否启用多因子认证（TOTP）
-	MFASecret    string     `db:"mfa_secret" json:"-"`                // TOTP 共享密钥，JSON 序列化时隐藏
-	IsActive     bool       `db:"is_active" json:"is_active"`         // 账户是否激活，禁用后无法登录
+	Username     string     `db:"username" json:"username"`                     // 登录用户名，唯一标识
+	Name         string     `db:"name" json:"name"`                             // 用户显示名称
+	Email        string     `db:"email" json:"email"`                           // 邮箱地址
+	PasswordHash string     `db:"password_hash" json:"-"`                       // bcrypt 密码哈希，JSON 序列化时隐藏
+	MFAEnabled   bool       `db:"mfa_enabled" json:"mfa_enabled"`               // 是否启用多因子认证（TOTP）
+	MFASecret    string     `db:"mfa_secret" json:"-"`                          // TOTP 共享密钥，JSON 序列化时隐藏
+	IsActive     bool       `db:"is_active" json:"is_active"`                   // 账户是否激活，禁用后无法登录
 	LastLoginAt  *time.Time `db:"last_login_at" json:"last_login_at,omitempty"` // 最近一次登录时间，可为空
-	CreatedAt    time.Time  `db:"created_at" json:"created_at"`       // 账户创建时间
-	UpdatedAt    time.Time  `db:"updated_at" json:"updated_at"`       // 最近更新时间
+	CreatedAt    time.Time  `db:"created_at" json:"created_at"`                 // 账户创建时间
+	UpdatedAt    time.Time  `db:"updated_at" json:"updated_at"`                 // 最近更新时间
 }
 
 // Role 角色模型，用于 RBAC 权限控制。
@@ -36,8 +36,8 @@ type Role struct {
 // OrgID 关联到组织节点，实现多租户隔离。
 type UserGroup struct {
 	ID        int64     `db:"id" json:"id"`
-	Name      string    `db:"name" json:"name"`       // 用户组名称
-	OrgID     int64     `db:"org_id" json:"org_id"`   // 所属组织 ID，关联 Node 表中 org 类型节点
+	Name      string    `db:"name" json:"name"`     // 用户组名称
+	OrgID     int64     `db:"org_id" json:"org_id"` // 所属组织 ID，关联 Node 表中 org 类型节点
 	CreatedAt time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
@@ -58,9 +58,9 @@ type Platform struct {
 type PlatformProtocol struct {
 	ID         int64     `db:"id" json:"id"`
 	PlatformID int64     `db:"platform_id" json:"platform_id"` // 所属平台 ID
-	Name       string    `db:"name" json:"name"`                // 协议名称，如 ssh、rdp、mysql
-	Port       int       `db:"port" json:"port"`                // 协议默认端口号
-	Settings   string    `db:"settings" json:"settings"`        // 协议配置项（JSON 字符串），如字符集等
+	Name       string    `db:"name" json:"name"`               // 协议名称，如 ssh、rdp、mysql
+	Port       int       `db:"port" json:"port"`               // 协议默认端口号
+	Settings   string    `db:"settings" json:"settings"`       // 协议配置项（JSON 字符串），如字符集等
 	CreatedAt  time.Time `db:"created_at" json:"created_at"`
 }
 
@@ -69,9 +69,9 @@ type PlatformProtocol struct {
 // OrgID 用于多租户数据隔离，同一组织下的节点归该组织所有。
 type Node struct {
 	ID        int64     `db:"id" json:"id"`
-	Name      string    `db:"name" json:"name"`                       // 节点名称
-	ParentID  *int64    `db:"parent_id" json:"parent_id,omitempty"`   // 父节点 ID，nil 表示根节点
-	OrgID     int64     `db:"org_id" json:"org_id"`                   // 所属组织 ID
+	Name      string    `db:"name" json:"name"`                     // 节点名称
+	ParentID  *int64    `db:"parent_id" json:"parent_id,omitempty"` // 父节点 ID，nil 表示根节点
+	OrgID     int64     `db:"org_id" json:"org_id"`                 // 所属组织 ID
 	CreatedAt time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
@@ -81,12 +81,12 @@ type Node struct {
 // NodeID 关联 Node 表，将资产归入某个组织节点，nil 表示未分配节点。
 type Asset struct {
 	ID         int64     `db:"id" json:"id"`
-	Name       string    `db:"name" json:"name"`                       // 资产名称
-	Address    string    `db:"address" json:"address"`                 // 连接地址（IP 或域名）
-	PlatformID int64     `db:"platform_id" json:"platform_id"`         // 关联的平台 ID → Platform
-	NodeID     *int64    `db:"node_id" json:"node_id,omitempty"`       // 所属组织节点 ID → Node，nil 表示未归类
-	Comment    string    `db:"comment" json:"comment"`                 // 备注信息
-	IsActive   bool      `db:"is_active" json:"is_active"`             // 资产是否启用
+	Name       string    `db:"name" json:"name"`                 // 资产名称
+	Address    string    `db:"address" json:"address"`           // 连接地址（IP 或域名）
+	PlatformID int64     `db:"platform_id" json:"platform_id"`   // 关联的平台 ID → Platform
+	NodeID     *int64    `db:"node_id" json:"node_id,omitempty"` // 所属组织节点 ID → Node，nil 表示未归类
+	Comment    string    `db:"comment" json:"comment"`           // 备注信息
+	IsActive   bool      `db:"is_active" json:"is_active"`       // 资产是否启用
 	CreatedAt  time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
 }
@@ -94,9 +94,9 @@ type Asset struct {
 // AssetWithPlatform 资产与平台信息联合查询结果。
 // 嵌入 Asset 并追加平台名称和类型字段，用于列表展示时避免 N+1 查询。
 type AssetWithPlatform struct {
-	Asset                                                              // 嵌入 Asset 所有字段
-	PlatformName string `db:"platform_name" json:"platform_name"`      // 平台名称（来自 platforms 表 JOIN）
-	PlatformType string `db:"platform_type" json:"platform_type"`      // 平台类型（来自 platforms 表 JOIN）
+	Asset               // 嵌入 Asset 所有字段
+	PlatformName string `db:"platform_name" json:"platform_name"` // 平台名称（来自 platforms 表 JOIN）
+	PlatformType string `db:"platform_type" json:"platform_type"` // 平台类型（来自 platforms 表 JOIN）
 }
 
 // Account 资产账户模型，存储连接到某个资产所需的认证凭据。
@@ -139,16 +139,16 @@ type AssetPermission struct {
 // IsReusable 控制 Token 是单次使用还是可多次使用。
 type ConnectionToken struct {
 	ID             int64      `db:"id" json:"id"`
-	Value          string     `db:"value" json:"value"`                             // Token 值（UUID 字符串）
-	UserID         int64      `db:"user_id" json:"user_id"`                          // 关联的用户 ID → User
-	AssetID        int64      `db:"asset_id" json:"asset_id"`                        // 关联的资产 ID → Asset
-	AccountID      int64      `db:"account_id" json:"account_id"`                    // 关联的账号 ID → Account
-	Protocol       string     `db:"protocol" json:"protocol"`                        // 连接协议，如 ssh、rdp
-	ConnectMethod  string     `db:"connect_method" json:"connect_method"`            // 连接方式：direct（直连）或 proxy（代理转发）
-	IsReusable     bool       `db:"is_reusable" json:"is_reusable"`                  // 是否可重复使用，false 则使用后立即失效
-	ConnectOptions string     `db:"connect_options" json:"connect_options"`          // 连接选项（JSON 字符串），如终端大小、编码等
-	UsedAt         *time.Time `db:"used_at" json:"used_at,omitempty"`                // 首次使用时间，nil 表示未使用
-	ExpiresAt      time.Time  `db:"expires_at" json:"expires_at"`                    // Token 过期时间
+	Value          string     `db:"value" json:"value"`                     // Token 值（UUID 字符串）
+	UserID         int64      `db:"user_id" json:"user_id"`                 // 关联的用户 ID → User
+	AssetID        int64      `db:"asset_id" json:"asset_id"`               // 关联的资产 ID → Asset
+	AccountID      int64      `db:"account_id" json:"account_id"`           // 关联的账号 ID → Account
+	Protocol       string     `db:"protocol" json:"protocol"`               // 连接协议，如 ssh、rdp
+	ConnectMethod  string     `db:"connect_method" json:"connect_method"`   // 连接方式：direct（直连）或 proxy（代理转发）
+	IsReusable     bool       `db:"is_reusable" json:"is_reusable"`         // 是否可重复使用，false 则使用后立即失效
+	ConnectOptions string     `db:"connect_options" json:"connect_options"` // 连接选项（JSON 字符串），如终端大小、编码等
+	UsedAt         *time.Time `db:"used_at" json:"used_at,omitempty"`       // 首次使用时间，nil 表示未使用
+	ExpiresAt      time.Time  `db:"expires_at" json:"expires_at"`           // Token 过期时间
 	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
 }
 
@@ -157,19 +157,28 @@ type ConnectionToken struct {
 // Type 字段区分 Web 终端会话和直接 SSH 代理会话。
 type Session struct {
 	ID            int64      `db:"id" json:"id"`
-	UserID        int64      `db:"user_id" json:"user_id"`                         // 发起会话的用户 ID → User
-	AssetID       int64      `db:"asset_id" json:"asset_id"`                        // 连接的资产 ID → Asset
-	AccountID     int64      `db:"account_id" json:"account_id"`                    // 使用的账户 ID → Account
-	Protocol      string     `db:"protocol" json:"protocol"`                        // 会话使用的协议
-	Type          string     `db:"type" json:"type"`                                // 会话类型：web（Web 终端）或 ssh（SSH 代理）
-	LoginFrom     string     `db:"login_from" json:"login_from"`                    // 登录来源，如 web、ssh_client
-	RemoteAddr    string     `db:"remote_addr" json:"remote_addr"`                  // 客户端 IP 地址
-	RecordingPath string     `db:"recording_path" json:"recording_path"`            // 会话录制文件路径（asciicast / ttyrec 格式）
-	IsFinished    bool       `db:"is_finished" json:"is_finished"`                  // 会话是否已结束
-	DateStart     time.Time  `db:"date_start" json:"date_start"`                    // 会话开始时间
-	DateEnd       *time.Time `db:"date_end" json:"date_end,omitempty"`              // 会话结束时间，nil 表示仍在进行中
+	UserID        int64      `db:"user_id" json:"user_id"`               // 发起会话的用户 ID → User
+	AssetID       int64      `db:"asset_id" json:"asset_id"`             // 连接的资产 ID → Asset
+	AccountID     int64      `db:"account_id" json:"account_id"`         // 使用的账户 ID → Account
+	Protocol      string     `db:"protocol" json:"protocol"`             // 会话使用的协议
+	Type          string     `db:"type" json:"type"`                     // 会话类型：web（Web 终端）或 ssh（SSH 代理）
+	LoginFrom     string     `db:"login_from" json:"login_from"`         // 登录来源，如 web、ssh_client
+	RemoteAddr    string     `db:"remote_addr" json:"remote_addr"`       // 客户端 IP 地址
+	RecordingPath string     `db:"recording_path" json:"recording_path"` // 会话录制文件路径（asciicast / ttyrec 格式）
+	IsFinished    bool       `db:"is_finished" json:"is_finished"`       // 会话是否已结束
+	DateStart     time.Time  `db:"date_start" json:"date_start"`         // 会话开始时间
+	DateEnd       *time.Time `db:"date_end" json:"date_end,omitempty"`   // 会话结束时间，nil 表示仍在进行中
 	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt     time.Time  `db:"updated_at" json:"updated_at"`
+}
+
+// SessionSummary 是仪表盘/列表场景使用的会话摘要，追加用户、资产和账号展示名。
+type SessionSummary struct {
+	Session
+	Username    string `db:"username" json:"username"`
+	UserName    string `db:"user_name" json:"user_name"`
+	AssetName   string `db:"asset_name" json:"asset_name"`
+	AccountName string `db:"account_name" json:"account_name"`
 }
 
 // Setting 系统设置模型，以键值对形式存储全局配置项。
@@ -203,11 +212,11 @@ type RefreshToken struct {
 // UserID 可为 nil（如系统自动操作、未认证请求等场景）。
 type AuditLog struct {
 	ID         int64     `db:"id" json:"id"`
-	UserID     *int64    `db:"user_id" json:"user_id,omitempty"`  // 操作人用户 ID，nil 表示系统或未认证操作
-	Action     string    `db:"action" json:"action"`              // 操作类型：login、logout、create、update、delete、connect 等
-	Resource   string    `db:"resource" json:"resource"`          // 操作目标资源类型，如 user、asset、session
-	RemoteAddr string    `db:"remote_addr" json:"remote_addr"`    // 客户端 IP 地址
-	Detail     string    `db:"detail" json:"detail"`              // 操作详情（JSON 字符串），包含变更前后的数据对比
+	UserID     *int64    `db:"user_id" json:"user_id,omitempty"` // 操作人用户 ID，nil 表示系统或未认证操作
+	Action     string    `db:"action" json:"action"`             // 操作类型：login、logout、create、update、delete、connect 等
+	Resource   string    `db:"resource" json:"resource"`         // 操作目标资源类型，如 user、asset、session
+	RemoteAddr string    `db:"remote_addr" json:"remote_addr"`   // 客户端 IP 地址
+	Detail     string    `db:"detail" json:"detail"`             // 操作详情（JSON 字符串），包含变更前后的数据对比
 	CreatedAt  time.Time `db:"created_at" json:"created_at"`
 }
 

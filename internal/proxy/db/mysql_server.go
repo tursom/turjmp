@@ -17,10 +17,10 @@ import (
 // mysqlProxy 是 MySQL 协议代理的核心结构体。
 // 负责监听客户端 MySQL 连接，验证身份后转发到目标 MySQL 数据库。
 type mysqlProxy struct {
-	api            apiClient         // 后端 API 客户端（token 验证、会话管理、审计）
-	limit          *limiter          // 并发连接数限制器
-	connectTimeout time.Duration     // 连接目标数据库的超时时间
-	idleTimeout    time.Duration     // 客户端连接的空闲超时时间
+	api            apiClient     // 后端 API 客户端（token 验证、会话管理、审计）
+	limit          *limiter      // 并发连接数限制器
+	connectTimeout time.Duration // 连接目标数据库的超时时间
+	idleTimeout    time.Duration // 客户端连接的空闲超时时间
 }
 
 // newMySQLProxy 创建一个新的 MySQL 协议代理实例。
@@ -116,7 +116,7 @@ func (p *mysqlProxy) handleConn(parent context.Context, raw net.Conn) {
 		return
 	}
 	// Step 4: 调用后端 API 验证 token
-	auth, err := p.api.VerifyConnectionToken(ctx, token, remoteAddr)
+	auth, err := p.api.VerifyConnectionToken(ctx, token, remoteAddr, "mysql")
 	if err != nil {
 		_ = writeErrorPacket(raw, 2, 1045, "token verification failed")
 		return
@@ -127,15 +127,7 @@ func (p *mysqlProxy) handleConn(parent context.Context, raw net.Conn) {
 		return
 	}
 	// Step 5: 在审计系统中创建代理会话记录
-	session, err := p.api.CreateSession(ctx, sessionInfo{
-		UserID:        auth.UserID,
-		AssetID:       auth.AssetID,
-		AccountID:     auth.AccountID,
-		Protocol:      "mysql",
-		Type:          "db_proxy",
-		ConnectMethod: "mysql_client",
-		RemoteAddr:    remoteAddr,
-	})
+	session, err := p.api.CreateSession(ctx, dbSessionInfo(auth, "mysql", "mysql_client", remoteAddr))
 	if err != nil {
 		_ = writeErrorPacket(raw, 2, 1045, "create db session failed")
 		return
@@ -144,6 +136,11 @@ func (p *mysqlProxy) handleConn(parent context.Context, raw net.Conn) {
 	defer func() {
 		_ = p.api.FinishSession(context.Background(), session.SessionID)
 	}()
+	stopWatch := watchDBSessionFinish(ctx, p.api, session.SessionID, func() {
+		cancel()
+		_ = raw.Close()
+	})
+	defer stopWatch()
 	// Step 6: 连接目标 MySQL 数据库
 	target, err := p.openTarget(ctx, auth)
 	if err != nil {
@@ -166,7 +163,7 @@ func (p *mysqlProxy) handleConn(parent context.Context, raw net.Conn) {
 // mysqlTarget 持有到目标 MySQL 数据库的连接。
 // 使用 database/sql 标准库的连接池，但限制为 1 个连接以确保请求有序。
 type mysqlTarget struct {
-	db   *sql.DB  // 数据库连接池句柄
+	db   *sql.DB   // 数据库连接池句柄
 	conn *sql.Conn // 单个数据库连接
 }
 
@@ -208,14 +205,14 @@ func (t *mysqlTarget) close() {
 // 从客户端读取 MySQL 命令包，根据命令类型进行路由处理。
 // 支持的 6 种命令类型（mysqlCom*）：
 //
-//  mysqlComQuit (0x01)    — 客户端断开连接，退出循环
-//  mysqlComPing (0x0e)    — 心跳检测，返回 OK 包
-//  mysqlComInitDB (0x02)  — 切换数据库（USE dbname），转发到目标并审计
-//  mysqlComQuery (0x03)   — SQL 查询，转发到 handleQuery 进行结果集处理
-//  mysqlComStmtPrepare (0x16) — 预处理语句准备（暂不支持，返回错误 1295）
-//  mysqlComStmtExecute (0x17) — 预处理语句执行（暂不支持，返回错误 1295）
-//  mysqlComStmtClose  (0x19)  — 关闭预处理语句（暂不支持，返回错误 1295）
-//  其他                          — 不支持的命令（返回错误 1064）
+//	mysqlComQuit (0x01)    — 客户端断开连接，退出循环
+//	mysqlComPing (0x0e)    — 心跳检测，返回 OK 包
+//	mysqlComInitDB (0x02)  — 切换数据库（USE dbname），转发到目标并审计
+//	mysqlComQuery (0x03)   — SQL 查询，转发到 handleQuery 进行结果集处理
+//	mysqlComStmtPrepare (0x16) — 预处理语句准备（暂不支持，返回错误 1295）
+//	mysqlComStmtExecute (0x17) — 预处理语句执行（暂不支持，返回错误 1295）
+//	mysqlComStmtClose  (0x19)  — 关闭预处理语句（暂不支持，返回错误 1295）
+//	其他                          — 不支持的命令（返回错误 1064）
 func (p *mysqlProxy) commandLoop(ctx context.Context, client net.Conn, target *mysqlTarget, auth authResult, session sessionInfo, remoteAddr string) {
 	for {
 		// 每次循环刷新空闲超时计时器

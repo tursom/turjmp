@@ -82,6 +82,7 @@ var consoleAccessChecks = []accessCheck{
 	{Key: "account_update", Object: "/api/v1/assets/:id/accounts/:aid", Method: http.MethodPut},
 	{Key: "account_delete", Object: "/api/v1/assets/:id/accounts/:aid", Method: http.MethodDelete},
 	{Key: "platforms", Object: "/api/v1/platforms", Method: http.MethodGet},
+	{Key: "platform_protocols", Object: "/api/v1/platforms/:id/protocols", Method: http.MethodGet},
 	{Key: "platform_create", Object: "/api/v1/platforms", Method: http.MethodPost},
 	{Key: "users", Object: "/api/v1/users", Method: http.MethodGet},
 	{Key: "user_create", Object: "/api/v1/users", Method: http.MethodPost},
@@ -812,12 +813,21 @@ func (h *Handler) VerifyConnectionToken(c *gin.Context) {
 	var req struct {
 		Token string `json:"token"`
 		// RemoteAddr 发起 SSH 连接的真实客户端地址，用于审计和 IP 白名单校验
-		RemoteAddr string `json:"remote_addr"`
+		RemoteAddr       string `json:"remote_addr"`
+		ExpectedProtocol string `json:"expected_protocol"`
+		Consume          *bool  `json:"consume"`
 	}
 	if !middleware.RequireJSON(c, &req) {
 		return
 	}
-	result, err := h.Tokens.Verify(req.Token, c.GetHeader("X-Proxy-Auth"), c.ClientIP())
+	consume := true
+	if req.Consume != nil {
+		consume = *req.Consume
+	}
+	result, err := h.Tokens.VerifyWithOptions(req.Token, c.GetHeader("X-Proxy-Auth"), c.ClientIP(), service.VerifyTokenOptions{
+		ExpectedProtocol: req.ExpectedProtocol,
+		Consume:          consume,
+	})
 	if err != nil {
 		httpx.Error(c, err)
 		return
@@ -989,40 +999,19 @@ func (h *Handler) ProxyCreateAuditLog(c *gin.Context) {
 // DashboardSummary 返回管理控制台仪表盘所需的聚合统计，避免前端拉取全量会话后自行聚合。
 // 端点：GET /api/v1/dashboard/summary（需 JWT 认证 + RBAC 鉴权）
 func (h *Handler) DashboardSummary(c *gin.Context) {
-	assets, err := h.Assets.ListAssets()
-	if err != nil {
-		httpx.Error(c, err)
-		return
-	}
-	sessions, err := h.Sessions.List()
-	if err != nil {
-		httpx.Error(c, err)
-		return
-	}
 	now := time.Now().UTC()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	activeUsers := map[int64]struct{}{}
-	activeSessions := 0
-	todaySessions := 0
-	for _, session := range sessions {
-		if !session.IsFinished {
-			activeSessions++
-			activeUsers[session.UserID] = struct{}{}
-		}
-		if !session.DateStart.Before(todayStart) {
-			todaySessions++
-		}
-	}
-	recent := sessions
-	if len(recent) > 10 {
-		recent = recent[:10]
+	summary, err := h.Store.DashboardSummary(todayStart, 10)
+	if err != nil {
+		httpx.Error(c, err)
+		return
 	}
 	httpx.JSON(c, 200, gin.H{
-		"total_assets":    len(assets),
-		"active_sessions": activeSessions,
-		"today_sessions":  todaySessions,
-		"active_users":    len(activeUsers),
-		"recent_sessions": recent,
+		"total_assets":    summary.TotalAssets,
+		"active_sessions": summary.ActiveSessions,
+		"today_sessions":  summary.TodaySessions,
+		"active_users":    summary.ActiveUsers,
+		"recent_sessions": summary.RecentSessions,
 		"generated_at":    now,
 	})
 }

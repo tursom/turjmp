@@ -45,9 +45,11 @@ func (c *APIClient) VerifyConnectionToken(ctx context.Context, token, remoteAddr
 		} `json:"account"`
 	}
 	// 构造 POST 请求：提交 token 和 remote_addr 到验证端点
-	if err := c.post(ctx, "/api/v1/authentication/super-connection-tokens/verify/", map[string]string{
-		"token":       token,
-		"remote_addr": remoteAddr,
+	if err := c.post(ctx, "/api/v1/authentication/super-connection-tokens/verify/", map[string]any{
+		"token":             token,
+		"remote_addr":       remoteAddr,
+		"expected_protocol": "rdp",
+		"consume":           true,
 	}, &out); err != nil {
 		return authResult{}, err
 	}

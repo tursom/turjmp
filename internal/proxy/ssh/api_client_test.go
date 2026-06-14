@@ -11,18 +11,18 @@ import (
 )
 
 func TestAPIClientVerifyConnectionToken(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/authentication/super-connection-tokens/verify/" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 		if r.Header.Get("X-Proxy-Auth") != "secret" {
 			t.Fatalf("missing proxy auth header")
 		}
-		var req map[string]string
+		var req map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatal(err)
 		}
-		if req["token"] != "token-1" || req["remote_addr"] != "1.2.3.4:5555" {
+		if req["token"] != "token-1" || req["remote_addr"] != "1.2.3.4:5555" || req["expected_protocol"] != "ssh" || req["consume"] != true {
 			t.Fatalf("unexpected verify body %#v", req)
 		}
 		writeEnvelope(t, w, http.StatusOK, map[string]any{
@@ -43,10 +43,9 @@ func TestAPIClientVerifyConnectionToken(t *testing.T) {
 				"secret_type": "password",
 			},
 		})
-	}))
-	defer ts.Close()
+	})
 
-	got, err := newTestAPIClient(ts.URL).VerifyConnectionToken(t.Context(), "token-1", "1.2.3.4:5555")
+	got, err := newTestAPIClient(handler).VerifyConnectionToken(t.Context(), "token-1", "1.2.3.4:5555")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +62,7 @@ func TestAPIClientVerifyConnectionToken(t *testing.T) {
 
 func TestAPIClientSessionAuditSettingsRulesAndHostKeys(t *testing.T) {
 	var sawCreate, sawFinish, sawAudit, sawSetting, sawRules, sawKeys bool
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Proxy-Auth") != "secret" {
 			t.Fatalf("missing proxy auth header")
 		}
@@ -110,10 +109,9 @@ func TestAPIClientSessionAuditSettingsRulesAndHostKeys(t *testing.T) {
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
-	defer ts.Close()
+	})
 
-	client := newTestAPIClient(ts.URL)
+	client := newTestAPIClient(handler)
 	session, err := client.CreateSession(t.Context(), targetSessionInfo{
 		UserID:        1,
 		AssetID:       2,
@@ -163,40 +161,50 @@ func TestAPIClientSessionAuditSettingsRulesAndHostKeys(t *testing.T) {
 
 func TestAPIClientErrorEnvelopeAndInvalidJSON(t *testing.T) {
 	t.Run("error envelope", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			writeErrorEnvelope(t, w, http.StatusUnauthorized, "unauthorized", "bad token")
-		}))
-		defer ts.Close()
+		})
 
-		_, err := newTestAPIClient(ts.URL).VerifyConnectionToken(t.Context(), "bad", "remote")
+		_, err := newTestAPIClient(handler).VerifyConnectionToken(t.Context(), "bad", "remote")
 		if err == nil || !strings.Contains(err.Error(), "unauthorized: bad token") {
 			t.Fatalf("err=%v", err)
 		}
 	})
 
 	t.Run("invalid json", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("{"))
-		}))
-		defer ts.Close()
+		})
 
-		_, err := newTestAPIClient(ts.URL).GetSetting(t.Context(), "x")
+		_, err := newTestAPIClient(handler).GetSetting(t.Context(), "x")
 		if err == nil {
 			t.Fatal("expected invalid JSON error")
 		}
 	})
 }
 
-func newTestAPIClient(baseURL string) *APIClient {
-	return NewAPIClient(config.Config{
+func newTestAPIClient(handler http.Handler) *APIClient {
+	client := NewAPIClient(config.Config{
 		Proxy: config.ProxyConfig{
-			APIBaseURL: baseURL,
+			APIBaseURL: "http://turjmp.test",
 		},
 		ProxyAuth: config.ProxyAuthConfig{
 			Secret: "secret",
 		},
 	})
+	client.http.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Result(), nil
+	})
+	return client
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func writeEnvelope(t *testing.T, w http.ResponseWriter, status int, data any) {

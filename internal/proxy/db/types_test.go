@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tursom/turjmp/internal/config"
 )
 
 func TestExtractConnectionToken(t *testing.T) {
@@ -142,6 +144,27 @@ func TestLimiter(t *testing.T) {
 	}
 }
 
+func TestDBSessionInfoUsesTokenConnectMethodForWebDB(t *testing.T) {
+	web := dbSessionInfo(authResult{
+		UserID:        1,
+		AssetID:       2,
+		AccountID:     3,
+		ConnectMethod: "web_db",
+	}, "mysql", "mysql_client", "remote")
+	if web.Type != "db_terminal" || web.ConnectMethod != "web_db" || web.Protocol != "mysql" {
+		t.Fatalf("unexpected web db session: %#v", web)
+	}
+
+	native := dbSessionInfo(authResult{
+		UserID:    1,
+		AssetID:   2,
+		AccountID: 3,
+	}, "mysql", "mysql_client", "remote")
+	if native.Type != "db_proxy" || native.ConnectMethod != "mysql_client" || native.Protocol != "mysql" {
+		t.Fatalf("unexpected native db session: %#v", native)
+	}
+}
+
 func TestBuildMySQLDSN(t *testing.T) {
 	got := buildMySQLDSN(authResult{
 		Target: targetConfig{Address: "db.internal", Port: 3307, Protocol: "mysql"},
@@ -249,6 +272,66 @@ func TestBuildUSQLDSN(t *testing.T) {
 				if got := u.Query().Get(k); got != v {
 					t.Fatalf("query %s got %q want %q", k, got, v)
 				}
+			}
+		})
+	}
+}
+
+func TestBuildUSQLProxyDSN(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol string
+		token    string
+		cfg      config.DBProxyConfig
+		wantURL  string
+		wantErr  string
+	}{
+		{
+			name:     "mysql default listener",
+			protocol: "mysql",
+			token:    "token-1",
+			wantURL:  "mysql://web%23token-1@127.0.0.1:3307/",
+		},
+		{
+			name:     "postgres wildcard listener",
+			protocol: "postgresql",
+			token:    "token-2",
+			cfg:      config.DBProxyConfig{PostgresAddr: "0.0.0.0:15437"},
+			wantURL:  "postgres://web%23token-2@127.0.0.1:15437/postgres?sslmode=disable",
+		},
+		{
+			name:     "mysql explicit listener",
+			protocol: "mysql",
+			token:    "token-3",
+			cfg:      config.DBProxyConfig{MySQLAddr: "127.0.0.2:13307"},
+			wantURL:  "mysql://web%23token-3@127.0.0.2:13307/",
+		},
+		{
+			name:     "missing token",
+			protocol: "mysql",
+			wantErr:  "connection token required",
+		},
+		{
+			name:     "unsupported",
+			protocol: "oracle",
+			token:    "token-4",
+			wantErr:  "不支持的数据库终端协议",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildUSQLProxyDSN(tt.protocol, tt.token, tt.cfg)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err=%v want contains %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.wantURL {
+				t.Fatalf("got %q want %q", got, tt.wantURL)
 			}
 		})
 	}
