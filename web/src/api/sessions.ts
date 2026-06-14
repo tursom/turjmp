@@ -37,6 +37,14 @@ export async function recording(id: number): Promise<SessionRecording> {
   return res.data
 }
 
+export async function downloadRecordingContent(id: number): Promise<string> {
+  const res = await client.get<string>(`/sessions/${id}/recording`, {
+    params: { download: 1 },
+    responseType: 'text',
+  })
+  return res.data
+}
+
 export async function listCommands(id: number): Promise<AuditLog[]> {
   const res = await client.get<AuditLog[]>(`/sessions/${id}/commands`)
   return res.data

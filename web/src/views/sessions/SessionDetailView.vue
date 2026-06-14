@@ -64,6 +64,15 @@
             >
               打开录像
             </el-button>
+            <el-button
+              v-if="session.recording_path"
+              size="small"
+              plain
+              :loading="recordingLoading"
+              @click="downloadRecording"
+            >
+              下载
+            </el-button>
           </div>
         </el-descriptions-item>
         <el-descriptions-item label="开始时间">
@@ -116,13 +125,14 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import * as sessionsApi from '@/api/sessions'
 import type { AuditLog, Session } from '@/types'
 
 const route = useRoute()
+const router = useRouter()
 
 const sessionId = computed(() => Number(route.params.id))
 
@@ -193,6 +203,23 @@ async function openRecording() {
   recordingLoading.value = true
   try {
     const result = await sessionsApi.recording(sessionId.value)
+    if (!result.available || (!result.url && !result.download_url)) {
+      ElMessage.warning('录像文件不可用')
+      return
+    }
+    router.push(`/sessions/${sessionId.value}/replay`)
+  } catch (err: unknown) {
+    ElMessage.error(err instanceof Error ? err.message : '打开录像失败')
+  } finally {
+    recordingLoading.value = false
+  }
+}
+
+async function downloadRecording() {
+  if (!sessionId.value) return
+  recordingLoading.value = true
+  try {
+    const result = await sessionsApi.recording(sessionId.value)
     const target = result.download_url || result.url
     if (!result.available || !target) {
       ElMessage.warning('录像文件不可用')
@@ -200,7 +227,7 @@ async function openRecording() {
     }
     globalThis.open(target, '_blank', 'noopener,noreferrer')
   } catch (err: unknown) {
-    ElMessage.error(err instanceof Error ? err.message : '打开录像失败')
+    ElMessage.error(err instanceof Error ? err.message : '下载录像失败')
   } finally {
     recordingLoading.value = false
   }

@@ -185,6 +185,12 @@ const routes = [
         meta: { title: '会话', access: 'sessions' },
       },
       {
+        path: 'sessions/:id/replay',
+        name: 'SessionReplay',
+        component: () => import('@/views/sessions/SessionReplayView.vue'),
+        meta: { title: '会话回放', access: 'sessions' },
+      },
+      {
         path: 'sessions/:id',
         name: 'SessionDetail',
         component: () => import('@/views/sessions/SessionDetailView.vue'),

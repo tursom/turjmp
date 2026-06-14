@@ -6,10 +6,12 @@
         <h2 v-if="asset">{{ asset.name }}</h2>
         <h2 v-else>资产详情</h2>
       </div>
-      <el-button v-if="canOpenTerminal && terminalProtocol" type="success" @click="handleWebTerminal">
-        Web 终端
-      </el-button>
-      <el-button v-if="canUpdateAssets" type="primary" @click="handleEdit">编辑</el-button>
+      <div class="header-actions">
+        <el-button v-if="canOpenTerminal && terminalProtocol" type="success" @click="handleWebTerminal">
+          Web 终端
+        </el-button>
+        <el-button v-if="canUpdateAssets" type="primary" @click="handleEdit">编辑</el-button>
+      </div>
     </div>
 
     <el-tabs v-model="activeTab">
@@ -78,6 +80,14 @@
           </el-table-column>
         </el-table>
       </el-tab-pane>
+
+      <el-tab-pane label="原生连接" name="native">
+        <NativeConnectionPanel
+          v-if="asset"
+          :asset="asset"
+          :protocols="protocols"
+        />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -89,6 +99,7 @@ import { ElMessage } from 'element-plus'
 import * as assetsApi from '@/api/assets'
 import type { Asset, Platform, Node, PlatformProtocol } from '@/types'
 import AccountManagement from './AccountManagement.vue'
+import NativeConnectionPanel from './NativeConnectionPanel.vue'
 import { useAuthStore } from '@/stores/auth'
 import {
   canUseWebTerminal,
@@ -212,6 +223,12 @@ onMounted(() => {
   gap: 12px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .header-left h2 {
   margin: 0;
   font-size: 18px;
@@ -220,5 +237,12 @@ onMounted(() => {
 
 .info-descriptions {
   margin-top: 8px;
+}
+
+@media (max-width: 768px) {
+  .page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 </style>
