@@ -21,6 +21,17 @@ type User struct {
 	UpdatedAt    time.Time  `db:"updated_at" json:"updated_at"`                 // 最近更新时间
 }
 
+// RDPProxyCredential 保存用户用于原生 RDP MITM 代理前端认证的独立密码哈希。
+// 它与 users.password_hash 相互独立，避免复用 Web 登录密码。
+type RDPProxyCredential struct {
+	UserID       int64      `db:"user_id" json:"user_id"`
+	PasswordHash string     `db:"password_hash" json:"-"`
+	IsEnabled    bool       `db:"is_enabled" json:"is_enabled"`
+	CreatedAt    time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time  `db:"updated_at" json:"updated_at"`
+	DisabledAt   *time.Time `db:"disabled_at" json:"disabled_at"`
+}
+
 // Role 角色模型，用于 RBAC 权限控制。
 // 用户通过关联表绑定角色，角色决定用户能访问哪些资源和执行哪些操作。
 type Role struct {

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -104,6 +105,148 @@ func TestPhase1RouterHealthAuthAndRBAC(t *testing.T) {
 		if !access.Access[key] {
 			t.Fatalf("operator access[%s]=false, access=%#v", key, access.Access)
 		}
+	}
+	if access.Access["user_rdp_proxy_credential"] {
+		t.Fatalf("operator should not manage user rdp proxy credentials, access=%#v", access.Access)
+	}
+}
+
+func TestPhase1RDPProxyCredentialAPIs(t *testing.T) {
+	env := newPhase1APITestEnv(t)
+
+	unauthorized := phase1Request(t, env.router, http.MethodGet, "/api/v1/auth/rdp-proxy-credential", nil, nil)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("self credential without token status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+
+	adminToken := phase1Login(t, env.router, "admin", "admin123")
+	adminHeader := phase1AuthHeader(adminToken)
+	statusResp := phase1Request(t, env.router, http.MethodGet, "/api/v1/auth/rdp-proxy-credential", nil, adminHeader)
+	if statusResp.Code != http.StatusOK {
+		t.Fatalf("self credential status=%d body=%s", statusResp.Code, statusResp.Body.String())
+	}
+	status := phase1DecodeData[service.RDPProxyCredentialStatus](t, statusResp)
+	if status.Configured || status.Enabled || status.UserID != 1 {
+		t.Fatalf("unexpected empty self status: %#v", status)
+	}
+
+	setResp := phase1Request(t, env.router, http.MethodPut, "/api/v1/auth/rdp-proxy-credential", gin.H{
+		"password": "rdp-admin-pass-1",
+	}, adminHeader)
+	if setResp.Code != http.StatusOK {
+		t.Fatalf("self credential set status=%d body=%s", setResp.Code, setResp.Body.String())
+	}
+	phase1AssertNoCredentialSecretLeak(t, setResp.Body.String())
+	setStatus := phase1DecodeData[service.RDPProxyCredentialStatus](t, setResp)
+	if !setStatus.Configured || !setStatus.Enabled || setStatus.UpdatedAt == nil {
+		t.Fatalf("unexpected set self status: %#v", setStatus)
+	}
+
+	resetResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/auth/rdp-proxy-credential/reset", gin.H{
+		"password": "rdp-admin-pass-2",
+	}, adminHeader)
+	if resetResp.Code != http.StatusOK {
+		t.Fatalf("self credential reset status=%d body=%s", resetResp.Code, resetResp.Body.String())
+	}
+	phase1AssertNoCredentialSecretLeak(t, resetResp.Body.String())
+	if _, err := service.NewRDPProxyCredentialService(env.store, 8).Verify("admin", "rdp-admin-pass-1"); !errors.Is(err, domain.ErrUnauthorized) {
+		t.Fatalf("old self rdp password err=%v, want unauthorized", err)
+	}
+	if _, err := service.NewRDPProxyCredentialService(env.store, 8).Verify("admin", "rdp-admin-pass-2"); err != nil {
+		t.Fatalf("new self rdp password verify err=%v", err)
+	}
+
+	disableResp := phase1Request(t, env.router, http.MethodDelete, "/api/v1/auth/rdp-proxy-credential", nil, adminHeader)
+	if disableResp.Code != http.StatusOK {
+		t.Fatalf("self credential disable status=%d body=%s", disableResp.Code, disableResp.Body.String())
+	}
+	disabled := phase1DecodeData[service.RDPProxyCredentialStatus](t, disableResp)
+	if !disabled.Configured || disabled.Enabled || disabled.DisabledAt == nil {
+		t.Fatalf("unexpected disabled self status: %#v", disabled)
+	}
+
+	operatorRole, err := env.store.GetRoleByName("operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator, err := service.NewUserService(env.store, 8).Create(service.CreateUserInput{
+		Username: "rdpoperator",
+		Name:     "RDP Operator",
+		Password: "operator123",
+		RoleIDs:  []int64{operatorRole.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operatorToken := phase1Login(t, env.router, "rdpoperator", "operator123")
+	operatorHeader := phase1AuthHeader(operatorToken)
+	operatorSelf := phase1Request(t, env.router, http.MethodPut, "/api/v1/auth/rdp-proxy-credential", gin.H{
+		"password": "operator-rdp-pass",
+	}, operatorHeader)
+	if operatorSelf.Code != http.StatusOK {
+		t.Fatalf("operator self credential set status=%d body=%s", operatorSelf.Code, operatorSelf.Body.String())
+	}
+	operatorAdmin := phase1Request(t, env.router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/rdp-proxy-credential", operator.ID), nil, operatorHeader)
+	if operatorAdmin.Code != http.StatusForbidden {
+		t.Fatalf("operator managed credential status=%d body=%s", operatorAdmin.Code, operatorAdmin.Body.String())
+	}
+
+	auditorRole, err := env.store.GetRoleByName("auditor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditor, err := service.NewUserService(env.store, 8).Create(service.CreateUserInput{
+		Username: "rdpauditor",
+		Name:     "RDP Auditor",
+		Password: "auditor123",
+		RoleIDs:  []int64{auditorRole.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditorToken := phase1Login(t, env.router, "rdpauditor", "auditor123")
+	auditorAdmin := phase1Request(t, env.router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/rdp-proxy-credential", auditor.ID), nil, phase1AuthHeader(auditorToken))
+	if auditorAdmin.Code != http.StatusForbidden {
+		t.Fatalf("auditor managed credential status=%d body=%s", auditorAdmin.Code, auditorAdmin.Body.String())
+	}
+
+	adminManagedStatus := phase1Request(t, env.router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/rdp-proxy-credential", operator.ID), nil, adminHeader)
+	if adminManagedStatus.Code != http.StatusOK {
+		t.Fatalf("admin managed credential status=%d body=%s", adminManagedStatus.Code, adminManagedStatus.Body.String())
+	}
+	managed := phase1DecodeData[service.RDPProxyCredentialStatus](t, adminManagedStatus)
+	if !managed.Configured || !managed.Enabled || managed.UserID != operator.ID {
+		t.Fatalf("unexpected admin managed status: %#v", managed)
+	}
+	adminManagedSet := phase1Request(t, env.router, http.MethodPut, fmt.Sprintf("/api/v1/users/%d/rdp-proxy-credential", operator.ID), gin.H{
+		"password": "managed-rdp-pass-1",
+	}, adminHeader)
+	if adminManagedSet.Code != http.StatusOK {
+		t.Fatalf("admin managed set status=%d body=%s", adminManagedSet.Code, adminManagedSet.Body.String())
+	}
+	phase1AssertNoCredentialSecretLeak(t, adminManagedSet.Body.String())
+	if _, err := service.NewRDPProxyCredentialService(env.store, 8).Verify("rdpoperator", "managed-rdp-pass-1"); err != nil {
+		t.Fatalf("managed set verify err=%v", err)
+	}
+	adminManagedReset := phase1Request(t, env.router, http.MethodPost, fmt.Sprintf("/api/v1/users/%d/rdp-proxy-credential/reset", operator.ID), gin.H{
+		"password": "managed-rdp-pass-2",
+	}, adminHeader)
+	if adminManagedReset.Code != http.StatusOK {
+		t.Fatalf("admin managed reset status=%d body=%s", adminManagedReset.Code, adminManagedReset.Body.String())
+	}
+	if _, err := service.NewRDPProxyCredentialService(env.store, 8).Verify("rdpoperator", "managed-rdp-pass-1"); !errors.Is(err, domain.ErrUnauthorized) {
+		t.Fatalf("old managed rdp password err=%v, want unauthorized", err)
+	}
+	if _, err := service.NewRDPProxyCredentialService(env.store, 8).Verify("rdpoperator", "managed-rdp-pass-2"); err != nil {
+		t.Fatalf("new managed rdp password verify err=%v", err)
+	}
+	adminManagedDisable := phase1Request(t, env.router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d/rdp-proxy-credential", operator.ID), nil, adminHeader)
+	if adminManagedDisable.Code != http.StatusOK {
+		t.Fatalf("admin managed disable status=%d body=%s", adminManagedDisable.Code, adminManagedDisable.Body.String())
+	}
+	managedDisabled := phase1DecodeData[service.RDPProxyCredentialStatus](t, adminManagedDisable)
+	if managedDisabled.Enabled || managedDisabled.DisabledAt == nil {
+		t.Fatalf("unexpected admin managed disabled status: %#v", managedDisabled)
 	}
 }
 
@@ -627,17 +770,18 @@ func newPhase1APITestEnv(t *testing.T) phase1APITestEnv {
 		t.Fatal(err)
 	}
 	h := &handler.Handler{
-		Config:      cfg,
-		Auth:        service.NewAuthService(store, jwtMgr, cfg),
-		Users:       service.NewUserService(store, cfg.Security.PasswordMinLength),
-		Assets:      service.NewAssetService(store, box),
-		Permissions: service.NewPermissionService(store),
-		Tokens:      service.NewTokenService(store, box, cfg.ProxyAuth),
-		Settings:    settings,
-		Sessions:    service.NewSessionService(store),
-		HostKeys:    service.NewHostKeyService(store),
-		Store:       store,
-		Enforcer:    enforcer,
+		Config:         cfg,
+		Auth:           service.NewAuthService(store, jwtMgr, cfg),
+		Users:          service.NewUserService(store, cfg.Security.PasswordMinLength),
+		RDPCredentials: service.NewRDPProxyCredentialService(store, cfg.Security.PasswordMinLength),
+		Assets:         service.NewAssetService(store, box),
+		Permissions:    service.NewPermissionService(store),
+		Tokens:         service.NewTokenService(store, box, cfg.ProxyAuth),
+		Settings:       settings,
+		Sessions:       service.NewSessionService(store),
+		HostKeys:       service.NewHostKeyService(store),
+		Store:          store,
+		Enforcer:       enforcer,
 	}
 	return phase1APITestEnv{router: NewRouter(cfg, zap.NewNop(), db, h), store: store, cfg: cfg, enforcer: enforcer}
 }
@@ -690,6 +834,15 @@ func phase1DecodeData[T any](t *testing.T, resp *httptest.ResponseRecorder) T {
 		t.Fatalf("decode body %s: %v", resp.Body.String(), err)
 	}
 	return envelope.Data
+}
+
+func phase1AssertNoCredentialSecretLeak(t *testing.T, body string) {
+	t.Helper()
+	for _, forbidden := range []string{"password_hash", "rdp-admin-pass", "operator-rdp-pass", "managed-rdp-pass"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("credential response leaked %q in body: %s", forbidden, body)
+		}
+	}
 }
 
 func phase1AuthHeader(token string) map[string]string {

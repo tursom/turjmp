@@ -252,14 +252,15 @@ func startAPI(cfg config.Config, log *zap.Logger) (*server.Server, *repository.D
 
 	h := &handler.Handler{
 		// 注入运行时配置，供 Handler 生成原生客户端连接地址时使用
-		Config:      cfg,
-		Auth:        service.NewAuthService(store, jwtMgr, cfg),
-		Users:       service.NewUserService(store, cfg.Security.PasswordMinLength),
-		Assets:      service.NewAssetService(store, box),
-		Permissions: service.NewPermissionService(store),
-		Tokens:      service.NewTokenService(store, box, cfg.ProxyAuth),
-		Settings:    settingService,
-		Sessions:    service.NewSessionService(store),
+		Config:         cfg,
+		Auth:           service.NewAuthService(store, jwtMgr, cfg),
+		Users:          service.NewUserService(store, cfg.Security.PasswordMinLength),
+		RDPCredentials: service.NewRDPProxyCredentialService(store, cfg.Security.PasswordMinLength),
+		Assets:         service.NewAssetService(store, box),
+		Permissions:    service.NewPermissionService(store),
+		Tokens:         service.NewTokenService(store, box, cfg.ProxyAuth),
+		Settings:       settingService,
+		Sessions:       service.NewSessionService(store),
 		// 主机密钥管理服务，提供 SSH HostKey 的生成、存储和查询
 		HostKeys: service.NewHostKeyService(store),
 		Store:    store,

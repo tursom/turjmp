@@ -73,6 +73,10 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	authOnly.POST("/logout", h.Logout)
 	authOnly.POST("/mfa/setup", h.MFASetup)
 	authOnly.POST("/mfa/verify", h.MFAVerify)
+	authOnly.GET("/rdp-proxy-credential", h.GetMyRDPProxyCredential)
+	authOnly.PUT("/rdp-proxy-credential", h.SetMyRDPProxyCredential)
+	authOnly.POST("/rdp-proxy-credential/reset", h.ResetMyRDPProxyCredential)
+	authOnly.DELETE("/rdp-proxy-credential", h.DisableMyRDPProxyCredential)
 
 	// secure：需 JWT 认证 + Casbin RBAC 鉴权的安全路由组，覆盖用户/角色/资产/权限/会话/配置/审计管理
 	secure := v1.Group("", middleware.Auth(h.Auth), middleware.RBAC(h.Enforcer))
@@ -81,6 +85,10 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	secure.GET("/users/:id", h.GetUser)
 	secure.PUT("/users/:id", h.UpdateUser)
 	secure.DELETE("/users/:id", h.DeleteUser)
+	secure.GET("/users/:id/rdp-proxy-credential", h.GetUserRDPProxyCredential)
+	secure.PUT("/users/:id/rdp-proxy-credential", h.SetUserRDPProxyCredential)
+	secure.POST("/users/:id/rdp-proxy-credential/reset", h.ResetUserRDPProxyCredential)
+	secure.DELETE("/users/:id/rdp-proxy-credential", h.DisableUserRDPProxyCredential)
 
 	secure.GET("/roles", h.ListRoles)
 	secure.POST("/roles", h.CreateRole)

@@ -115,6 +115,38 @@ func (s *Store) DeleteUser(id int64) error {
 	return err
 }
 
+// UpsertRDPProxyCredential 创建或覆盖用户的 RDP 代理独立密码哈希，并重新启用该凭据。
+func (s *Store) UpsertRDPProxyCredential(userID int64, passwordHash string) (domain.RDPProxyCredential, error) {
+	var credential domain.RDPProxyCredential
+	q := s.query(`INSERT INTO rdp_proxy_credentials (user_id, password_hash, is_enabled, disabled_at)
+		VALUES (?, ?, ?, NULL)
+		ON CONFLICT(user_id) DO UPDATE SET
+			password_hash = excluded.password_hash,
+			is_enabled = excluded.is_enabled,
+			disabled_at = NULL,
+			updated_at = CURRENT_TIMESTAMP
+		RETURNING *`)
+	err := s.db.Get(&credential, q, userID, passwordHash, true)
+	return credential, notFound(err)
+}
+
+// GetRDPProxyCredential 查询指定用户的 RDP 代理凭据。
+func (s *Store) GetRDPProxyCredential(userID int64) (domain.RDPProxyCredential, error) {
+	var credential domain.RDPProxyCredential
+	err := s.db.Get(&credential, s.query(`SELECT * FROM rdp_proxy_credentials WHERE user_id = ?`), userID)
+	return credential, notFound(err)
+}
+
+// DisableRDPProxyCredential 禁用指定用户的 RDP 代理凭据。
+func (s *Store) DisableRDPProxyCredential(userID int64) (domain.RDPProxyCredential, error) {
+	var credential domain.RDPProxyCredential
+	q := s.query(`UPDATE rdp_proxy_credentials
+		SET is_enabled = ?, disabled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		WHERE user_id = ? RETURNING *`)
+	err := s.db.Get(&credential, q, false, userID)
+	return credential, notFound(err)
+}
+
 // CreateRole 创建新角色，INSERT 后通过 RETURNING * 返回完整记录。
 func (s *Store) CreateRole(r *domain.Role) error {
 	q := s.query(`INSERT INTO roles (name, description) VALUES (?, ?) RETURNING *`)

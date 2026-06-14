@@ -42,6 +42,12 @@ proxy:
     max_connections: 20
     idle_timeout_seconds: 3600
     connect_timeout_seconds: 15
+    native_enabled: false
+    native_addr: ":33890"
+    native_public_host: ""
+    native_public_port: 33890
+    native_cert_path: ""
+    native_key_path: ""
 totp:
   issuer: "Turjmp"
 logging:

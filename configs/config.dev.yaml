@@ -60,6 +60,13 @@ proxy:
     idle_timeout_seconds: 3600
     # 连接 guacd 超时秒数（15 秒）
     connect_timeout_seconds: 15
+    # 原生 RDP MITM 代理默认关闭，后续阶段接入引擎后显式启用
+    native_enabled: false
+    native_addr: ":33890"
+    native_public_host: ""
+    native_public_port: 33890
+    native_cert_path: ""
+    native_key_path: ""
 totp:
   issuer: "Turjmp"
 logging:

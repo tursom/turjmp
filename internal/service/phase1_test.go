@@ -219,6 +219,121 @@ func TestPhase1RefreshRejectsInactiveUsers(t *testing.T) {
 	}
 }
 
+func TestPhase1RDPProxyCredentialLifecycle(t *testing.T) {
+	store, closeFn := newMigratedTestStore(t)
+	defer closeFn()
+	userSvc := NewUserService(store, 8)
+	rdpCreds := NewRDPProxyCredentialService(store, 8)
+
+	user, err := userSvc.Create(CreateUserInput{
+		Username: "rdpuser",
+		Name:     "RDP User",
+		Password: "loginpass",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := rdpCreds.Status(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Configured || status.Enabled || status.UserID != user.ID {
+		t.Fatalf("unexpected empty status: %#v", status)
+	}
+	if _, err := rdpCreds.Verify(user.Username, "rdp-pass-1"); !errors.Is(err, domain.ErrUnauthorized) {
+		t.Fatalf("missing credential verify err=%v, want unauthorized", err)
+	}
+	if _, err := rdpCreds.Set(user.ID, "short"); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("short credential err=%v, want invalid argument", err)
+	}
+
+	setStatus, err := rdpCreds.Set(user.ID, "rdp-pass-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !setStatus.Configured || !setStatus.Enabled || setStatus.UpdatedAt == nil || setStatus.DisabledAt != nil {
+		t.Fatalf("unexpected set status: %#v", setStatus)
+	}
+	stored, err := store.GetRDPProxyCredential(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.PasswordHash == "rdp-pass-1" || stored.PasswordHash == "" {
+		t.Fatalf("credential hash not stored safely: %#v", stored)
+	}
+	if verified, err := rdpCreds.Verify(user.Username, "rdp-pass-1"); err != nil || verified.ID != user.ID {
+		t.Fatalf("verify set credential user=%#v err=%v", verified, err)
+	}
+	if _, err := rdpCreds.Verify(user.Username, "wrong-pass"); !errors.Is(err, domain.ErrUnauthorized) {
+		t.Fatalf("wrong password err=%v, want unauthorized", err)
+	}
+
+	disabled, err := rdpCreds.Disable(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !disabled.Configured || disabled.Enabled || disabled.DisabledAt == nil {
+		t.Fatalf("unexpected disabled status: %#v", disabled)
+	}
+	if _, err := rdpCreds.Verify(user.Username, "rdp-pass-1"); !errors.Is(err, domain.ErrUnauthorized) {
+		t.Fatalf("disabled credential err=%v, want unauthorized", err)
+	}
+	if _, err := rdpCreds.Reset(user.ID, "rdp-pass-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rdpCreds.Verify(user.Username, "rdp-pass-1"); !errors.Is(err, domain.ErrUnauthorized) {
+		t.Fatalf("old password err=%v, want unauthorized", err)
+	}
+	if _, err := rdpCreds.Verify(user.Username, "rdp-pass-2"); err != nil {
+		t.Fatalf("new password verify err=%v", err)
+	}
+
+	inactive := false
+	if _, err := userSvc.Update(user.ID, UpdateUserInput{
+		Username: user.Username,
+		Name:     user.Name,
+		Email:    user.Email,
+		IsActive: &inactive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rdpCreds.Verify(user.Username, "rdp-pass-2"); !errors.Is(err, domain.ErrUnauthorized) {
+		t.Fatalf("inactive user verify err=%v, want unauthorized", err)
+	}
+	if _, err := rdpCreds.Disable(999999); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("disable missing credential err=%v, want not found", err)
+	}
+}
+
+func TestPhase1RDPRouteUsernameParsing(t *testing.T) {
+	route, err := ParseRDPRouteUsername("alice#12#34")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.Username != "alice" || route.AssetID != 12 || route.AccountID != 34 {
+		t.Fatalf("unexpected route: %#v", route)
+	}
+
+	for _, raw := range []string{
+		"",
+		"alice",
+		"alice#12",
+		"alice#12#34#56",
+		"#12#34",
+		"alice##34",
+		"alice#12#",
+		"alice#abc#34",
+		"alice#12#abc",
+		"alice#0#34",
+		"alice#12#0",
+		"alice#-1#34",
+	} {
+		if _, err := ParseRDPRouteUsername(raw); !errors.Is(err, domain.ErrInvalidArgument) {
+			t.Fatalf("ParseRDPRouteUsername(%q) err=%v, want invalid argument", raw, err)
+		}
+	}
+}
+
 func TestPhase1SettingsMaskAndEncryptSecretValues(t *testing.T) {
 	store, closeFn := newMigratedTestStore(t)
 	defer closeFn()

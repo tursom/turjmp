@@ -39,6 +39,8 @@ type Handler struct {
 	Auth *service.AuthService
 	// Users 用户管理服务：处理用户的 CRUD 操作及角色关联
 	Users *service.UserService
+	// RDPCredentials 原生 RDP MITM 代理前端认证独立密码服务
+	RDPCredentials *service.RDPProxyCredentialService
 	// Assets 资产管理服务：处理资产、资产组和账户的 CRUD 操作及树形结构查询
 	Assets *service.AssetService
 	// Permissions 权限管理服务：处理权限规则的 CRUD 操作
@@ -88,6 +90,7 @@ var consoleAccessChecks = []accessCheck{
 	{Key: "user_create", Object: "/api/v1/users", Method: http.MethodPost},
 	{Key: "user_update", Object: "/api/v1/users/:id", Method: http.MethodPut},
 	{Key: "user_delete", Object: "/api/v1/users/:id", Method: http.MethodDelete},
+	{Key: "user_rdp_proxy_credential", Object: "/api/v1/users/:id/rdp-proxy-credential", Method: http.MethodGet},
 	{Key: "roles", Object: "/api/v1/roles", Method: http.MethodGet},
 	{Key: "role_create", Object: "/api/v1/roles", Method: http.MethodPost},
 	{Key: "role_update", Object: "/api/v1/roles/:id", Method: http.MethodPut},
@@ -209,6 +212,122 @@ func (h *Handler) MFAVerify(c *gin.Context) {
 		return
 	}
 	httpx.NoContent(c)
+}
+
+// GetMyRDPProxyCredential 查询当前用户的原生 RDP 代理凭据状态。
+func (h *Handler) GetMyRDPProxyCredential(c *gin.Context) {
+	principal, err := httpx.MustPrincipal(c)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	status, err := h.RDPCredentials.Status(principal.UserID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, status)
+}
+
+// SetMyRDPProxyCredential 设置当前用户的原生 RDP 代理独立密码。
+func (h *Handler) SetMyRDPProxyCredential(c *gin.Context) {
+	principal, err := httpx.MustPrincipal(c)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	h.setRDPProxyCredential(c, principal.UserID)
+}
+
+// ResetMyRDPProxyCredential 覆盖当前用户的原生 RDP 代理独立密码并重新启用。
+func (h *Handler) ResetMyRDPProxyCredential(c *gin.Context) {
+	principal, err := httpx.MustPrincipal(c)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	h.resetRDPProxyCredential(c, principal.UserID)
+}
+
+// DisableMyRDPProxyCredential 禁用当前用户的原生 RDP 代理独立密码。
+func (h *Handler) DisableMyRDPProxyCredential(c *gin.Context) {
+	principal, err := httpx.MustPrincipal(c)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	status, err := h.RDPCredentials.Disable(principal.UserID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, status)
+}
+
+// GetUserRDPProxyCredential 查询指定用户的原生 RDP 代理凭据状态。
+func (h *Handler) GetUserRDPProxyCredential(c *gin.Context) {
+	status, err := h.RDPCredentials.Status(pathID(c, "id"))
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, status)
+}
+
+// SetUserRDPProxyCredential 设置指定用户的原生 RDP 代理独立密码。
+func (h *Handler) SetUserRDPProxyCredential(c *gin.Context) {
+	h.setRDPProxyCredential(c, pathID(c, "id"))
+}
+
+// ResetUserRDPProxyCredential 覆盖指定用户的原生 RDP 代理独立密码并重新启用。
+func (h *Handler) ResetUserRDPProxyCredential(c *gin.Context) {
+	h.resetRDPProxyCredential(c, pathID(c, "id"))
+}
+
+// DisableUserRDPProxyCredential 禁用指定用户的原生 RDP 代理独立密码。
+func (h *Handler) DisableUserRDPProxyCredential(c *gin.Context) {
+	status, err := h.RDPCredentials.Disable(pathID(c, "id"))
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, status)
+}
+
+func (h *Handler) setRDPProxyCredential(c *gin.Context, userID int64) {
+	password, ok := bindRDPProxyCredentialPassword(c)
+	if !ok {
+		return
+	}
+	status, err := h.RDPCredentials.Set(userID, password)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, status)
+}
+
+func (h *Handler) resetRDPProxyCredential(c *gin.Context, userID int64) {
+	password, ok := bindRDPProxyCredentialPassword(c)
+	if !ok {
+		return
+	}
+	status, err := h.RDPCredentials.Reset(userID, password)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, status)
+}
+
+func bindRDPProxyCredentialPassword(c *gin.Context) (string, bool) {
+	var req struct {
+		Password string `json:"password"`
+	}
+	if !middleware.RequireJSON(c, &req) {
+		return "", false
+	}
+	return req.Password, true
 }
 
 // ListUsers 查询所有用户列表。

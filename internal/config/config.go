@@ -213,7 +213,13 @@ type RDPProxyConfig struct {
 	RecordingPath         string `koanf:"recording_path"`          // guacd 录制暂存目录
 	MaxConnections        int    `koanf:"max_connections"`         // 最大并发 RDP 会话数
 	IdleTimeoutSeconds    int    `koanf:"idle_timeout_seconds"`    // WebSocket/guacd 空闲超时秒数
-	ConnectTimeoutSeconds int    `koanf:"connect_timeout_seconds"`  // 连接 guacd 的超时秒数
+	ConnectTimeoutSeconds int    `koanf:"connect_timeout_seconds"` // 连接 guacd 的超时秒数
+	NativeEnabled         bool   `koanf:"native_enabled"`          // 是否启用原生 RDP MITM 代理
+	NativeAddr            string `koanf:"native_addr"`             // 原生 RDP MITM 代理监听地址，如 ":33890"
+	NativePublicHost      string `koanf:"native_public_host"`      // 生成 .rdp 文件时暴露给客户端的主机名
+	NativePublicPort      int    `koanf:"native_public_port"`      // 生成 .rdp 文件时暴露给客户端的端口
+	NativeCertPath        string `koanf:"native_cert_path"`        // 原生 RDP MITM 前端证书路径
+	NativeKeyPath         string `koanf:"native_key_path"`         // 原生 RDP MITM 前端私钥路径
 }
 
 // ListenAddr 返回 RDP WebSocket 代理监听地址。
@@ -262,6 +268,22 @@ func (c RDPProxyConfig) ConnectionLimit() int {
 		return 20
 	}
 	return c.MaxConnections
+}
+
+// NativeListenAddr 返回原生 RDP MITM 代理监听地址。
+func (c RDPProxyConfig) NativeListenAddr() string {
+	if c.NativeAddr == "" {
+		return ":33890"
+	}
+	return c.NativeAddr
+}
+
+// NativeClientPort 返回 .rdp 文件中暴露给 mstsc 的端口。
+func (c RDPProxyConfig) NativeClientPort() int {
+	if c.NativePublicPort <= 0 {
+		return 33890
+	}
+	return c.NativePublicPort
 }
 
 // TOTPConfig TOTP 多因子认证配置。
@@ -374,6 +396,12 @@ func defaults() map[string]any {
 		"proxy.rdp.max_connections":         20,
 		"proxy.rdp.idle_timeout_seconds":    3600,
 		"proxy.rdp.connect_timeout_seconds": 15,
+		"proxy.rdp.native_enabled":          false,
+		"proxy.rdp.native_addr":             ":33890",
+		"proxy.rdp.native_public_host":      "",
+		"proxy.rdp.native_public_port":      33890,
+		"proxy.rdp.native_cert_path":        "",
+		"proxy.rdp.native_key_path":         "",
 		"totp.issuer":                       "Turjmp",
 		"logging.level":                     "info",
 		"logging.encoding":                  "json",
