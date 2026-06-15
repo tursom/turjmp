@@ -107,6 +107,57 @@ func (c *APIClient) ResolveNativeRDP(ctx context.Context, routeUsername, passwor
 	}, nil
 }
 
+// StartNativeRDPSession authenticates mstsc credentials and creates a Turjmp native RDP session.
+func (c *APIClient) StartNativeRDPSession(ctx context.Context, routeUsername, password, remoteAddr string) (nativeSessionInfo, error) {
+	var out struct {
+		SessionID int64        `json:"session_id"`
+		UserID    int64        `json:"user_id"`
+		AssetID   int64        `json:"asset_id"`
+		AccountID int64        `json:"account_id"`
+		Target    targetConfig `json:"target"`
+		Account   struct {
+			Username   string `json:"username"`
+			Secret     string `json:"secret"`
+			SecretType string `json:"secret_type"`
+		} `json:"account"`
+	}
+	if err := c.post(ctx, "/api/v1/proxy/rdp-native/sessions/start", map[string]any{
+		"route_username": routeUsername,
+		"password":       password,
+		"remote_addr":    remoteAddr,
+	}, &out); err != nil {
+		return nativeSessionInfo{}, err
+	}
+	if out.Target.Port == 0 && isRDPProtocol(out.Target.Protocol) {
+		out.Target.Port = 3389
+	}
+	return nativeSessionInfo{
+		sessionInfo: sessionInfo{
+			UserID:        out.UserID,
+			AssetID:       out.AssetID,
+			AccountID:     out.AccountID,
+			Protocol:      "rdp",
+			Type:          "rdp",
+			ConnectMethod: "rdp_client",
+			RemoteAddr:    remoteAddr,
+			SessionID:     out.SessionID,
+		},
+		Target: out.Target,
+		Account: targetAccount{
+			Username:   out.Account.Username,
+			Secret:     out.Account.Secret,
+			SecretType: out.Account.SecretType,
+		},
+	}, nil
+}
+
+// FinishNativeRDPSession marks a native RDP MITM session complete.
+func (c *APIClient) FinishNativeRDPSession(ctx context.Context, sessionID int64, reason string) error {
+	return c.post(ctx, fmt.Sprintf("/api/v1/proxy/rdp-native/sessions/%d/finish", sessionID), map[string]any{
+		"reason": reason,
+	}, nil)
+}
+
 // CreateSession creates an audited RDP session record.
 func (c *APIClient) CreateSession(ctx context.Context, session sessionInfo) (sessionInfo, error) {
 	var out struct {

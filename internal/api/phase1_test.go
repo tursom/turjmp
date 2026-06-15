@@ -248,6 +248,30 @@ func TestPhase1RDPProxyCredentialAPIs(t *testing.T) {
 	if managedDisabled.Enabled || managedDisabled.DisabledAt == nil {
 		t.Fatalf("unexpected admin managed disabled status: %#v", managedDisabled)
 	}
+	credentialLogs, total, err := env.store.ListAuditLogs(repository.AuditLogFilter{Search: "rdp_proxy_credential", Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total < 7 {
+		t.Fatalf("expected credential audit logs, total=%d logs=%#v", total, credentialLogs)
+	}
+	for _, log := range credentialLogs {
+		if !strings.HasPrefix(log.Action, "rdp_proxy_credential.") {
+			continue
+		}
+		for _, forbidden := range []string{
+			"rdp-admin-pass-1",
+			"rdp-admin-pass-2",
+			"operator-rdp-pass",
+			"managed-rdp-pass-1",
+			"managed-rdp-pass-2",
+			"password_hash",
+		} {
+			if strings.Contains(log.Detail, forbidden) {
+				t.Fatalf("credential audit leaked %q: %#v", forbidden, log)
+			}
+		}
+	}
 }
 
 func TestPhase1UpdateRoleRenamesCasbinPolicies(t *testing.T) {
@@ -751,6 +775,108 @@ func TestPhase1ProxyNativeRDPResolve(t *testing.T) {
 	}
 }
 
+func TestPhase1ProxyNativeRDPSessionLifecycle(t *testing.T) {
+	env := newPhase1APITestEnv(t)
+	box := phase1APISecretBox(t, env.cfg)
+	user, asset, account := createPhase1APIRDPResolveFixture(t, env.store, box)
+	body := gin.H{
+		"route_username": fmt.Sprintf("%s#%d#%d", user.Username, asset.ID, account.ID),
+		"password":       "front-rdp-pass",
+		"remote_addr":    "203.0.113.10:50000",
+	}
+
+	unauthorized := phase1Request(t, env.router, http.MethodPost, "/api/v1/proxy/rdp-native/sessions/start", body, nil)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("native rdp start without auth status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+	startResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/proxy/rdp-native/sessions/start", body, phase1ProxyHeader(env.cfg.ProxyAuth.Secret))
+	if startResp.Code != http.StatusCreated {
+		t.Fatalf("native rdp start status=%d body=%s", startResp.Code, startResp.Body.String())
+	}
+	started := phase1DecodeData[service.NativeRDPSessionStartResult](t, startResp)
+	if started.SessionID == 0 || started.UserID != user.ID || started.AssetID != asset.ID || started.AccountID != account.ID {
+		t.Fatalf("unexpected start identity: %#v", started)
+	}
+	if started.Target.Address != asset.Address || started.Target.Port != 3389 || started.Account.Secret != "target-rdp-password" {
+		t.Fatalf("unexpected start target/account: %#v", started)
+	}
+	for _, forbidden := range []string{"front-rdp-pass", "password_hash"} {
+		if strings.Contains(startResp.Body.String(), forbidden) {
+			t.Fatalf("start response leaked %q: %s", forbidden, startResp.Body.String())
+		}
+	}
+	session, err := env.store.GetSession(started.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Protocol != "rdp" || session.Type != "rdp" || session.LoginFrom != "rdp_client" || session.IsFinished {
+		t.Fatalf("unexpected native session: %#v", session)
+	}
+	limited := phase1Request(t, env.router, http.MethodPost, "/api/v1/proxy/rdp-native/sessions/start", body, phase1ProxyHeader(env.cfg.ProxyAuth.Secret))
+	if limited.Code != http.StatusForbidden {
+		t.Fatalf("native rdp max connections status=%d body=%s", limited.Code, limited.Body.String())
+	}
+	finishResp := phase1Request(t, env.router, http.MethodPost, fmt.Sprintf("/api/v1/proxy/rdp-native/sessions/%d/finish", started.SessionID), gin.H{
+		"reason": "disconnect",
+	}, phase1ProxyHeader(env.cfg.ProxyAuth.Secret))
+	if finishResp.Code != http.StatusOK {
+		t.Fatalf("native rdp finish status=%d body=%s", finishResp.Code, finishResp.Body.String())
+	}
+	finished := phase1DecodeData[service.NativeRDPSessionFinishResult](t, finishResp)
+	if !finished.Finished || finished.Reason != "disconnect" {
+		t.Fatalf("unexpected finish result: %#v", finished)
+	}
+	againResp := phase1Request(t, env.router, http.MethodPost, fmt.Sprintf("/api/v1/proxy/rdp-native/sessions/%d/finish", started.SessionID), gin.H{
+		"reason": "proxy_shutdown",
+	}, phase1ProxyHeader(env.cfg.ProxyAuth.Secret))
+	if againResp.Code != http.StatusOK {
+		t.Fatalf("native rdp second finish status=%d body=%s", againResp.Code, againResp.Body.String())
+	}
+	again := phase1DecodeData[service.NativeRDPSessionFinishResult](t, againResp)
+	if again.Finished {
+		t.Fatalf("finish should be idempotent: %#v", again)
+	}
+	webSession := domain.Session{
+		UserID:     user.ID,
+		AssetID:    asset.ID,
+		AccountID:  account.ID,
+		Protocol:   "rdp",
+		Type:       "rdp",
+		LoginFrom:  "web_rdp",
+		RemoteAddr: "203.0.113.20:50000",
+	}
+	if err := env.store.CreateSession(&webSession); err != nil {
+		t.Fatal(err)
+	}
+	wrongSource := phase1Request(t, env.router, http.MethodPost, fmt.Sprintf("/api/v1/proxy/rdp-native/sessions/%d/finish", webSession.ID), gin.H{
+		"reason": "disconnect",
+	}, phase1ProxyHeader(env.cfg.ProxyAuth.Secret))
+	if wrongSource.Code != http.StatusForbidden {
+		t.Fatalf("native finish should not finish web rdp status=%d body=%s", wrongSource.Code, wrongSource.Body.String())
+	}
+	stillWeb, err := env.store.GetSession(webSession.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillWeb.IsFinished {
+		t.Fatalf("web rdp session should remain active: %#v", stillWeb)
+	}
+	logs, total, err := env.store.ListAuditLogs(repository.AuditLogFilter{Search: "rdp.native", Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total < 3 {
+		t.Fatalf("expected native rdp audit logs, total=%d logs=%#v", total, logs)
+	}
+	for _, log := range logs {
+		for _, forbidden := range []string{"front-rdp-pass", "target-rdp-password", "password_hash"} {
+			if strings.Contains(log.Detail, forbidden) {
+				t.Fatalf("audit leaked %q: %#v", forbidden, log)
+			}
+		}
+	}
+}
+
 type phase1APITestEnv struct {
 	router   http.Handler
 	store    *repository.Store
@@ -795,6 +921,10 @@ func newPhase1APITestEnv(t *testing.T) phase1APITestEnv {
 		ProxyAuth: config.ProxyAuthConfig{
 			Secret:     "proxy-secret",
 			AllowedIPs: []string{"127.0.0.1", "::1"},
+		},
+		Proxy: config.ProxyConfig{
+			APIBaseURL: "http://127.0.0.1:8080",
+			RDP:        config.RDPProxyConfig{MaxConnections: 1},
 		},
 		TOTP:      config.TOTPConfig{Issuer: "Turjmp"},
 		RateLimit: config.RateLimitConfig{Enabled: false},

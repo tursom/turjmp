@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -21,7 +22,8 @@ import (
 
 // Store 是数据库持久化操作的统一入口，通过 sqlx 执行所有 CRUD 操作。
 type Store struct {
-	db *DB
+	db             *DB
+	sessionLimitMu sync.Mutex
 }
 
 // AuditLogFilter describes server-side filtering and pagination for audit logs.
@@ -651,11 +653,57 @@ func (s *Store) CreateSession(sess *domain.Session) error {
 		sess.LoginFrom, sess.RemoteAddr, sess.RecordingPath, sess.IsFinished))
 }
 
+// CreateSessionUnderActiveLimit creates a session only if active sessions matching protocol/login_from are below limit.
+func (s *Store) CreateSessionUnderActiveLimit(sess *domain.Session, limit int) (bool, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	s.sessionLimitMu.Lock()
+	defer s.sessionLimitMu.Unlock()
+	q := s.query(`INSERT INTO sessions (user_id, asset_id, account_id, protocol, type, login_from, remote_addr,
+		recording_path, is_finished)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE (SELECT COUNT(1) FROM sessions WHERE is_finished = ? AND protocol = ? AND login_from = ?) < ?
+		RETURNING *`)
+	err := s.db.Get(sess, q, sess.UserID, sess.AssetID, sess.AccountID, sess.Protocol, sess.Type,
+		sess.LoginFrom, sess.RemoteAddr, sess.RecordingPath, sess.IsFinished,
+		false, sess.Protocol, sess.LoginFrom, limit)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return false, err
+}
+
 // UpdateSession 更新会话状态（结束时间、录制路径、是否完成），同时刷新 updated_at，返回更新后的记录。
 func (s *Store) UpdateSession(sess *domain.Session) error {
 	q := s.query(`UPDATE sessions SET is_finished = ?, date_end = ?, recording_path = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? RETURNING *`)
 	return notFound(s.db.Get(sess, q, sess.IsFinished, sess.DateEnd, sess.RecordingPath, sess.ID))
+}
+
+// FinishSessionOnce marks an active session finished exactly once.
+func (s *Store) FinishSessionOnce(id int64, recordingPath string) (domain.Session, bool, error) {
+	var sess domain.Session
+	q := s.query(`UPDATE sessions
+		SET is_finished = ?, date_end = COALESCE(date_end, CURRENT_TIMESTAMP),
+			recording_path = CASE WHEN ? <> '' THEN ? ELSE recording_path END,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND is_finished = ? RETURNING *`)
+	err := s.db.Get(&sess, q, true, recordingPath, recordingPath, id, false)
+	if err == nil {
+		return sess, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.Session{}, false, err
+	}
+	existing, getErr := s.GetSession(id)
+	if getErr != nil {
+		return domain.Session{}, false, getErr
+	}
+	return existing, false, nil
 }
 
 // GetSession 按 ID 查询会话记录，未找到时返回 domain.ErrNotFound。

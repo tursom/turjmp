@@ -37,6 +37,31 @@ func (f *fakeAPI) ResolveNativeRDP(_ context.Context, routeUsername, password, r
 	return f.auth, nil
 }
 
+func (f *fakeAPI) StartNativeRDPSession(_ context.Context, routeUsername, password, remoteAddr string) (nativeSessionInfo, error) {
+	if f.verifyErr != nil {
+		return nativeSessionInfo{}, f.verifyErr
+	}
+	return nativeSessionInfo{
+		sessionInfo: sessionInfo{
+			UserID:        f.auth.UserID,
+			AssetID:       f.auth.AssetID,
+			AccountID:     f.auth.AccountID,
+			Protocol:      "rdp",
+			Type:          "rdp",
+			ConnectMethod: "rdp_client",
+			RemoteAddr:    remoteAddr,
+			SessionID:     77,
+		},
+		Target:  f.auth.Target,
+		Account: f.auth.Account,
+	}, nil
+}
+
+func (f *fakeAPI) FinishNativeRDPSession(_ context.Context, sessionID int64, reason string) error {
+	f.finishedID = sessionID
+	return f.finishErr
+}
+
 func (f *fakeAPI) CreateSession(_ context.Context, session sessionInfo) (sessionInfo, error) {
 	if f.createErr != nil {
 		return sessionInfo{}, f.createErr
@@ -182,6 +207,78 @@ func TestFinishSessionStoresRecordingAndUpdatesSession(t *testing.T) {
 	}
 	if storage.data["memory://rdp-77"] != "guac-data" {
 		t.Fatalf("stored data=%q", storage.data["memory://rdp-77"])
+	}
+}
+
+func TestServerStartLaunchesNativeEngineDynamicConfig(t *testing.T) {
+	dir := t.TempDir()
+	enginePath := filepath.Join(dir, "fake-freerdp-proxy")
+	seenPath := filepath.Join(dir, "seen-config")
+	if err := os.WriteFile(enginePath, []byte("#!/bin/sh\ncp \"$1\" '"+seenPath+"'\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	certPath := filepath.Join(dir, "server.crt")
+	keyPath := filepath.Join(dir, "server.key")
+	if err := os.WriteFile(certPath, []byte("cert"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(t)
+	cfg.ProxyAuth.Secret = "proxy-secret"
+	cfg.Proxy.APIBaseURL = "http://127.0.0.1:8080/"
+	cfg.Proxy.RDP.NativeEnabled = true
+	cfg.Proxy.RDP.NativeAddr = "127.0.0.1:33900"
+	cfg.Proxy.RDP.NativeEnginePath = enginePath
+	cfg.Proxy.RDP.NativeWorkDir = filepath.Join(dir, "work")
+	cfg.Proxy.RDP.NativeCertPath = certPath
+	cfg.Proxy.RDP.NativeKeyPath = keyPath
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- NewServerWithDeps(cfg, &fakeAPI{}, &memoryStorage{}).Start(ctx)
+	}()
+	var raw []byte
+	deadline := time.After(2 * time.Second)
+	for raw == nil {
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatal("timed out waiting for native engine config")
+		default:
+			if data, err := os.ReadFile(seenPath); err == nil {
+				raw = data
+			} else {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("server start returned err=%v", err)
+	}
+	text := string(raw)
+	for _, want := range []string{
+		"FixedTarget=false",
+		"[Plugins]",
+		"Modules=turjmp",
+		"Required=turjmp",
+		"[Turjmp]",
+		"APIBaseURL=http://127.0.0.1:8080",
+		"ProxyAuth=proxy-secret",
+		"IdleTimeoutSeconds=1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("native config missing %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"target-password", "Password=", "User=administrator"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("native config leaked %q:\n%s", forbidden, text)
+		}
 	}
 }
 

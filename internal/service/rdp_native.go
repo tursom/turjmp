@@ -1,9 +1,12 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
+	"github.com/tursom/turjmp/internal/config"
 	"github.com/tursom/turjmp/internal/crypto"
 	"github.com/tursom/turjmp/internal/domain"
 	"github.com/tursom/turjmp/internal/repository"
@@ -50,6 +53,35 @@ type NativeRDPResolvedAccount struct {
 type NativeRDPResolveError struct {
 	Reason string
 	Err    error
+}
+
+// NativeRDPSessionStartInput starts a native RDP MITM session.
+type NativeRDPSessionStartInput struct {
+	RouteUsername string `json:"route_username"`
+	Password      string `json:"password"`
+	RemoteAddr    string `json:"remote_addr"`
+}
+
+// NativeRDPSessionStartResult contains target credentials plus the Turjmp session ID.
+type NativeRDPSessionStartResult struct {
+	SessionID int64                    `json:"session_id"`
+	UserID    int64                    `json:"user_id"`
+	AssetID   int64                    `json:"asset_id"`
+	AccountID int64                    `json:"account_id"`
+	Target    NativeRDPResolvedTarget  `json:"target"`
+	Account   NativeRDPResolvedAccount `json:"account"`
+}
+
+// NativeRDPSessionFinishInput completes a native RDP MITM session.
+type NativeRDPSessionFinishInput struct {
+	Reason string `json:"reason"`
+}
+
+// NativeRDPSessionFinishResult reports whether this call changed session state.
+type NativeRDPSessionFinishResult struct {
+	SessionID int64  `json:"session_id"`
+	Finished  bool   `json:"finished"`
+	Reason    string `json:"reason"`
 }
 
 func (e *NativeRDPResolveError) Error() string {
@@ -140,6 +172,169 @@ func (s *NativeRDPResolverService) Resolve(input NativeRDPResolveInput) (NativeR
 	}, nil
 }
 
+// StartSession validates native RDP credentials, creates a session, and writes audit records.
+func (s *NativeRDPResolverService) StartSession(input NativeRDPSessionStartInput, proxyCfg config.ProxyConfig) (NativeRDPSessionStartResult, error) {
+	resolveInput := NativeRDPResolveInput{
+		RouteUsername: input.RouteUsername,
+		Password:      input.Password,
+		RemoteAddr:    input.RemoteAddr,
+	}
+	resolved, err := s.Resolve(resolveInput)
+	if err != nil {
+		s.auditNativeRDPDenied(input, err)
+		return NativeRDPSessionStartResult{}, err
+	}
+	session := domain.Session{
+		UserID:     resolved.UserID,
+		AssetID:    resolved.AssetID,
+		AccountID:  resolved.AccountID,
+		Protocol:   "rdp",
+		Type:       "rdp",
+		LoginFrom:  "rdp_client",
+		RemoteAddr: input.RemoteAddr,
+	}
+	created, err := s.store.CreateSessionUnderActiveLimit(&session, proxyCfg.RDP.ConnectionLimit())
+	if err != nil {
+		return NativeRDPSessionStartResult{}, err
+	}
+	if !created {
+		s.auditNativeRDP(&resolved.UserID, "rdp.native.denied", "rdp", input.RemoteAddr, nativeRDPAuditDetail(nativeRDPAuditPayload{
+			AssetID:   resolved.AssetID,
+			AccountID: resolved.AccountID,
+			Reason:    "max_connections",
+		}))
+		return NativeRDPSessionStartResult{}, nativeRDPResolveDenied("max_connections", domain.ErrForbidden)
+	}
+	s.auditNativeRDP(&resolved.UserID, "rdp.native.start", "rdp", input.RemoteAddr, nativeRDPAuditDetail(nativeRDPAuditPayload{
+		SessionID: session.ID,
+		AssetID:   resolved.AssetID,
+		AccountID: resolved.AccountID,
+		Reason:    "started",
+	}))
+	return NativeRDPSessionStartResult{
+		SessionID: session.ID,
+		UserID:    resolved.UserID,
+		AssetID:   resolved.AssetID,
+		AccountID: resolved.AccountID,
+		Target:    resolved.Target,
+		Account:   resolved.Account,
+	}, nil
+}
+
+// FinishSession marks a native RDP session finished once and writes a completion audit once.
+func (s *NativeRDPResolverService) FinishSession(sessionID int64, input NativeRDPSessionFinishInput) (NativeRDPSessionFinishResult, error) {
+	if sessionID <= 0 {
+		return NativeRDPSessionFinishResult{}, domain.ErrInvalidArgument
+	}
+	reason := sanitizeNativeRDPReason(input.Reason)
+	existing, err := s.store.GetSession(sessionID)
+	if err != nil {
+		return NativeRDPSessionFinishResult{}, err
+	}
+	if existing.Protocol != "rdp" || existing.Type != "rdp" || existing.LoginFrom != "rdp_client" {
+		return NativeRDPSessionFinishResult{}, domain.ErrForbidden
+	}
+	session, changed, err := s.store.FinishSessionOnce(sessionID, "")
+	if err != nil {
+		return NativeRDPSessionFinishResult{}, err
+	}
+	if changed {
+		s.auditNativeRDP(&session.UserID, nativeRDPFinishAction(reason), "rdp", session.RemoteAddr, nativeRDPAuditDetail(nativeRDPAuditPayload{
+			SessionID: session.ID,
+			AssetID:   session.AssetID,
+			AccountID: session.AccountID,
+			Reason:    reason,
+		}))
+	}
+	return NativeRDPSessionFinishResult{SessionID: session.ID, Finished: changed, Reason: reason}, nil
+}
+
 func nativeRDPResolveDenied(reason string, err error) error {
 	return &NativeRDPResolveError{Reason: reason, Err: err}
+}
+
+type nativeRDPAuditPayload struct {
+	SessionID int64  `json:"session_id,omitempty"`
+	AssetID   int64  `json:"asset_id,omitempty"`
+	AccountID int64  `json:"account_id,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Protocol  string `json:"protocol"`
+	Source    string `json:"source"`
+}
+
+func nativeRDPAuditDetail(payload nativeRDPAuditPayload) string {
+	payload.Protocol = "rdp"
+	payload.Source = "rdp_client"
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return `{"protocol":"rdp","source":"rdp_client","reason":"marshal_failed"}`
+	}
+	return string(raw)
+}
+
+func (s *NativeRDPResolverService) auditNativeRDP(userID *int64, action, resource, remoteAddr, detail string) {
+	_ = s.store.Audit(userID, action, resource, remoteAddr, detail)
+}
+
+func (s *NativeRDPResolverService) auditNativeRDPDenied(input NativeRDPSessionStartInput, err error) {
+	reason := "denied"
+	var resolveErr *NativeRDPResolveError
+	if errors.As(err, &resolveErr) && resolveErr.Reason != "" {
+		reason = resolveErr.Reason
+	}
+	route, parseErr := ParseRDPRouteUsername(input.RouteUsername)
+	var userID *int64
+	if parseErr == nil {
+		if user, getErr := s.store.GetUserByUsername(route.Username); getErr == nil {
+			userID = &user.ID
+		}
+	}
+	payload := nativeRDPAuditPayload{Reason: reason}
+	if parseErr == nil {
+		payload.AssetID = route.AssetID
+		payload.AccountID = route.AccountID
+	}
+	s.auditNativeRDP(userID, "rdp.native.denied", "rdp", input.RemoteAddr, nativeRDPAuditDetail(payload))
+}
+
+func sanitizeNativeRDPReason(reason string) string {
+	reason = strings.TrimSpace(strings.ToLower(reason))
+	if reason == "" {
+		return "disconnect"
+	}
+	var b strings.Builder
+	for _, r := range reason {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '-' || r == '.':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteByte('_')
+		}
+		if b.Len() >= 64 {
+			break
+		}
+	}
+	if b.Len() == 0 {
+		return "disconnect"
+	}
+	return b.String()
+}
+
+func nativeRDPFinishAction(reason string) string {
+	switch reason {
+	case "target_login_failed", "target_connect_failed", "target_dial_failed", "idle_timeout", "proxy_shutdown":
+		return "rdp.native." + reason
+	default:
+		if strings.HasPrefix(reason, "target_") {
+			return "rdp.native.target_failure"
+		}
+		if _, err := strconv.ParseInt(reason, 10, 64); err == nil {
+			return "rdp.native.disconnect"
+		}
+		return "rdp.native.complete"
+	}
 }

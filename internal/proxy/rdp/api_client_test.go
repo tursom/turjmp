@@ -81,3 +81,68 @@ func TestAPIClientResolveNativeRDPDefaultsRDPPort(t *testing.T) {
 		t.Fatalf("default target port=%d", auth.Target.Port)
 	}
 }
+
+func TestAPIClientNativeRDPSessionStartAndFinish(t *testing.T) {
+	var sawStart, sawFinish bool
+	var gotSecret string
+	var startBody struct {
+		RouteUsername string `json:"route_username"`
+		Password      string `json:"password"`
+		RemoteAddr    string `json:"remote_addr"`
+	}
+	var finishBody struct {
+		Reason string `json:"reason"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSecret = r.Header.Get("X-Proxy-Auth")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/proxy/rdp-native/sessions/start":
+			sawStart = true
+			if err := json.NewDecoder(r.Body).Decode(&startBody); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = w.Write([]byte(`{"data":{
+				"session_id":77,
+				"user_id":11,
+				"asset_id":22,
+				"account_id":33,
+				"target":{"address":"win.internal","protocol":"rdp"},
+				"account":{"username":"administrator","secret":"target-password","secret_type":"password"}
+			}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/proxy/rdp-native/sessions/77/finish":
+			sawFinish = true
+			if err := json.NewDecoder(r.Body).Decode(&finishBody); err != nil {
+				t.Fatal(err)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewAPIClient(config.Config{
+		ProxyAuth: config.ProxyAuthConfig{Secret: "proxy-secret"},
+		Proxy:     config.ProxyConfig{APIBaseURL: server.URL},
+	})
+	session, err := client.StartNativeRDPSession(t.Context(), "alice#22#33", "front-password", "203.0.113.10:50000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.FinishNativeRDPSession(t.Context(), 77, "disconnect"); err != nil {
+		t.Fatal(err)
+	}
+	if !sawStart || !sawFinish || gotSecret != "proxy-secret" {
+		t.Fatalf("missing calls start=%v finish=%v secret=%q", sawStart, sawFinish, gotSecret)
+	}
+	if startBody.RouteUsername != "alice#22#33" || startBody.Password != "front-password" || startBody.RemoteAddr != "203.0.113.10:50000" {
+		t.Fatalf("unexpected start body: %#v", startBody)
+	}
+	if finishBody.Reason != "disconnect" {
+		t.Fatalf("finish reason=%q", finishBody.Reason)
+	}
+	if session.SessionID != 77 || session.ConnectMethod != "rdp_client" || session.Target.Port != 3389 || session.Account.Secret != "target-password" {
+		t.Fatalf("unexpected session: %#v", session)
+	}
+}

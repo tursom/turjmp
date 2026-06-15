@@ -27,6 +27,7 @@ type Server struct {
 	limit   *limiter                // 并发会话限流器
 	http    *http.Server            // HTTP 服务器实例
 	mu      sync.Mutex              // 并发保护锁
+	native  *NativeEngineHandle     // 原生 RDP MITM 引擎进程句柄
 }
 
 // NewServer creates an RDP proxy server using backend API callbacks and local recording storage.
@@ -62,28 +63,54 @@ func NewServerWithDeps(cfg config.Config, api apiClient, storage recorder.Storag
 	return s
 }
 
-// Start starts the RDP WebSocket HTTP listener and exits on context cancellation.
+// Start starts the RDP WebSocket HTTP listener and, when enabled, the native FreeRDP engine.
 func (s *Server) Start(ctx context.Context) error {
 	if err := ValidateNativeEngineConfig(s.cfg); err != nil {
 		return err
 	}
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	var nativeHandle *NativeEngineHandle
+	if s.cfg.Proxy.RDP.NativeEnabled {
+		engineCfg, err := NativeEngineConfigFromAppConfig(s.cfg, NativeFixedTarget{})
+		if err != nil {
+			return err
+		}
+		nativeHandle, err = NewFreeRDPEngine().Start(ctx, engineCfg)
+		if err != nil {
+			return err
+		}
+		s.setNativeHandle(nativeHandle)
+		go func() {
+			err := nativeHandle.Wait()
+			if ctx.Err() != nil {
+				return
+			}
+			if err == nil {
+				err = &NativeEngineError{Kind: NativeEngineErrorExit, Op: "wait", Err: errors.New("process exited")}
+			}
+			errCh <- fmt.Errorf("native rdp engine: %w", err)
+		}()
+	}
 	go func() {
 		errCh <- s.http.ListenAndServe()
 	}()
-	select {
-	case <-ctx.Done():
+	cleanup := func() error {
+		s.stopNativeEngine()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout())
 		defer cancel()
 		if err := s.http.Shutdown(shutdownCtx); err != nil {
 			return err
 		}
-		err := <-errCh
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		if err := cleanup(); err != nil {
+			return err
 		}
-		return err
+		return nil
 	case err := <-errCh:
+		_ = cleanup()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
@@ -93,9 +120,26 @@ func (s *Server) Start(ctx context.Context) error {
 
 // Stop shuts down the RDP listener without waiting for the parent context.
 func (s *Server) Stop() {
+	s.stopNativeEngine()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout())
 	defer cancel()
 	_ = s.http.Shutdown(shutdownCtx)
+}
+
+func (s *Server) setNativeHandle(handle *NativeEngineHandle) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.native = handle
+}
+
+func (s *Server) stopNativeEngine() {
+	s.mu.Lock()
+	handle := s.native
+	s.native = nil
+	s.mu.Unlock()
+	if handle != nil {
+		_ = handle.Stop()
+	}
 }
 
 // newWebSocketHandler 创建 WebSocket 处理器，将每个 WebSocket 连接委托给 connect 建立 guac 隧道。

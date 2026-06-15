@@ -45,10 +45,19 @@ type sessionInfo struct {
 	SessionID     int64
 }
 
+// nativeSessionInfo describes a native RDP MITM session started by FreeRDP.
+type nativeSessionInfo struct {
+	sessionInfo
+	Target  targetConfig
+	Account targetAccount
+}
+
 // apiClient is the subset of backend API calls needed by the RDP proxy.
 type apiClient interface {
 	VerifyConnectionToken(ctx context.Context, token, remoteAddr string) (authResult, error)
 	ResolveNativeRDP(ctx context.Context, routeUsername, password, remoteAddr string) (authResult, error)
+	StartNativeRDPSession(ctx context.Context, routeUsername, password, remoteAddr string) (nativeSessionInfo, error)
+	FinishNativeRDPSession(ctx context.Context, sessionID int64, reason string) error
 	CreateSession(ctx context.Context, session sessionInfo) (sessionInfo, error)
 	FinishSession(ctx context.Context, sessionID int64, recordingPath string) error
 	GetSetting(ctx context.Context, key string) (string, error)

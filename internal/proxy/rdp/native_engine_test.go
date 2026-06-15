@@ -14,7 +14,7 @@ import (
 
 func TestRenderFreeRDPProxyConfigIncludesFixedTargetAndCertificates(t *testing.T) {
 	cfg := nativeEngineTestConfig(t)
-	raw := renderFreeRDPProxyConfig(cfg)
+	raw := renderFreeRDPProxyFixedTargetConfig(cfg)
 	for _, want := range []string{
 		"[Server]",
 		"Host=127.0.0.1",
@@ -39,11 +39,51 @@ func TestRenderFreeRDPProxyConfigIncludesFixedTargetAndCertificates(t *testing.T
 	}
 }
 
+func TestRenderFreeRDPProxyConfigUsesTurjmpPluginWithoutTargetSecrets(t *testing.T) {
+	cfg := nativeEngineTestConfig(t)
+	cfg.APIBaseURL = "http://127.0.0.1:8080/"
+	cfg.ProxyAuthSecret = "proxy-secret"
+	cfg.MaxConnections = 12
+	cfg.IdleTimeout = 30 * time.Second
+	raw := renderFreeRDPProxyConfig(cfg)
+	for _, want := range []string{
+		"[Server]",
+		"Host=127.0.0.1",
+		"Port=33900",
+		"[Target]",
+		"FixedTarget=false",
+		"[Plugins]",
+		"Modules=turjmp",
+		"Required=turjmp",
+		"[Turjmp]",
+		"APIBaseURL=http://127.0.0.1:8080",
+		"ProxyAuth=proxy-secret",
+		"MaxConnections=12",
+		"IdleTimeoutSeconds=30",
+		"[Certificates]",
+		"CertificateFile=/tmp/rdp.crt",
+		"PrivateKeyFile=/tmp/rdp.key",
+	} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("config missing %q:\n%s", want, raw)
+		}
+	}
+	for _, forbidden := range []string{"target-password", "User=administrator", "Password=target-password", "Host=win.internal"} {
+		if strings.Contains(raw, forbidden) {
+			t.Fatalf("dynamic config leaked %q:\n%s", forbidden, raw)
+		}
+	}
+}
+
 func TestNativeEngineRedaction(t *testing.T) {
 	cfg := nativeEngineTestConfig(t)
+	cfg.ProxyAuthSecret = "proxy-secret"
 	redacted := cfg.Redacted()
 	if redacted.Target.Password != "[redacted]" {
 		t.Fatalf("password was not redacted: %#v", redacted.Target)
+	}
+	if redacted.ProxyAuthSecret != "[redacted]" {
+		t.Fatalf("proxy auth secret was not redacted: %#v", redacted)
 	}
 	if strings.Contains((&NativeEngineError{
 		Kind: NativeEngineErrorConfig,
@@ -179,6 +219,22 @@ exec sleep 5
 	}
 }
 
+func TestFreeRDPEngineFastExitIsStartError(t *testing.T) {
+	dir := t.TempDir()
+	enginePath := filepath.Join(dir, "fake-freerdp-proxy")
+	if err := os.WriteFile(enginePath, []byte("#!/bin/sh\nexit 42\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := nativeEngineTestConfig(t)
+	cfg.EnginePath = enginePath
+	cfg.WorkDir = filepath.Join(dir, "work")
+	_, err := NewFreeRDPEngine().Start(t.Context(), cfg)
+	var engineErr *NativeEngineError
+	if !errors.As(err, &engineErr) || engineErr.Kind != NativeEngineErrorStart {
+		t.Fatalf("err=%T %v, want start NativeEngineError", err, err)
+	}
+}
+
 func TestFreeRDPEngineContextCancelClassifiesWait(t *testing.T) {
 	dir := t.TempDir()
 	enginePath := filepath.Join(dir, "fake-freerdp-proxy")
@@ -224,7 +280,9 @@ func TestClassifyNativeEngineEvents(t *testing.T) {
 
 func TestNativeEngineConfigFromAppConfig(t *testing.T) {
 	cfg := config.Config{
+		ProxyAuth: config.ProxyAuthConfig{Secret: "proxy-secret"},
 		Proxy: config.ProxyConfig{
+			APIBaseURL: "http://127.0.0.1:8080",
 			RDP: config.RDPProxyConfig{
 				NativeAddr:       ":33900",
 				NativeEnginePath: "/usr/bin/freerdp-proxy",
@@ -248,11 +306,16 @@ func TestNativeEngineConfigFromAppConfig(t *testing.T) {
 	if engineCfg.Target.Port != 3389 {
 		t.Fatalf("target port=%d", engineCfg.Target.Port)
 	}
+	if engineCfg.APIBaseURL != "http://127.0.0.1:8080" || engineCfg.ProxyAuthSecret != "proxy-secret" || engineCfg.RequiredPluginName != "turjmp" {
+		t.Fatalf("unexpected plugin fields: %#v", engineCfg.Redacted())
+	}
 }
 
 func TestNativeEngineConfigFromResolvedAuth(t *testing.T) {
 	cfg := config.Config{
+		ProxyAuth: config.ProxyAuthConfig{Secret: "proxy-secret"},
 		Proxy: config.ProxyConfig{
+			APIBaseURL: "http://127.0.0.1:8080",
 			RDP: config.RDPProxyConfig{
 				NativeAddr:       "127.0.0.1:33900",
 				NativeEnginePath: "/usr/bin/freerdp-proxy",
@@ -286,12 +349,16 @@ func TestNativeEngineConfigFromResolvedAuth(t *testing.T) {
 func nativeEngineTestConfig(t *testing.T) NativeEngineConfig {
 	t.Helper()
 	return NativeEngineConfig{
-		EnginePath: "freerdp-proxy",
-		WorkDir:    t.TempDir(),
-		ListenHost: "127.0.0.1",
-		ListenPort: 33900,
-		CertPath:   "/tmp/rdp.crt",
-		KeyPath:    "/tmp/rdp.key",
+		EnginePath:      "freerdp-proxy",
+		WorkDir:         t.TempDir(),
+		ListenHost:      "127.0.0.1",
+		ListenPort:      33900,
+		CertPath:        "/tmp/rdp.crt",
+		KeyPath:         "/tmp/rdp.key",
+		APIBaseURL:      "http://127.0.0.1:8080",
+		ProxyAuthSecret: "proxy-secret",
+		MaxConnections:  20,
+		IdleTimeout:     time.Hour,
 		Target: NativeFixedTarget{
 			Host:     "win.internal",
 			Port:     3389,

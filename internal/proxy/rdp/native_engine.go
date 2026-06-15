@@ -89,20 +89,28 @@ type NativeFixedTarget struct {
 
 // NativeEngineConfig is the complete process boundary for the FreeRDP CLI wrapper.
 type NativeEngineConfig struct {
-	EnginePath  string
-	WorkDir     string
-	ListenHost  string
-	ListenPort  int
-	CertPath    string
-	KeyPath     string
-	Target      NativeFixedTarget
-	IdleTimeout time.Duration
+	EnginePath         string
+	WorkDir            string
+	ListenHost         string
+	ListenPort         int
+	CertPath           string
+	KeyPath            string
+	Target             NativeFixedTarget
+	APIBaseURL         string
+	ProxyAuthSecret    string
+	PluginName         string
+	RequiredPluginName string
+	MaxConnections     int
+	IdleTimeout        time.Duration
 }
 
 // Redacted returns a copy with secret material removed.
 func (c NativeEngineConfig) Redacted() NativeEngineConfig {
 	out := c
 	out.Target.Password = "[redacted]"
+	if out.ProxyAuthSecret != "" {
+		out.ProxyAuthSecret = "[redacted]"
+	}
 	return out
 }
 
@@ -187,14 +195,19 @@ func NativeEngineConfigFromAppConfig(cfg config.Config, target NativeFixedTarget
 		target.Port = 3389
 	}
 	return NativeEngineConfig{
-		EnginePath:  cfg.Proxy.RDP.NativeEngineCommand(),
-		WorkDir:     cfg.Proxy.RDP.NativeEngineWorkDir(),
-		ListenHost:  host,
-		ListenPort:  port,
-		CertPath:    cfg.Proxy.RDP.NativeCertPath,
-		KeyPath:     cfg.Proxy.RDP.NativeKeyPath,
-		Target:      target,
-		IdleTimeout: cfg.Proxy.RDP.IdleTimeout(),
+		EnginePath:         cfg.Proxy.RDP.NativeEngineCommand(),
+		WorkDir:            cfg.Proxy.RDP.NativeEngineWorkDir(),
+		ListenHost:         host,
+		ListenPort:         port,
+		CertPath:           cfg.Proxy.RDP.NativeCertPath,
+		KeyPath:            cfg.Proxy.RDP.NativeKeyPath,
+		Target:             target,
+		APIBaseURL:         strings.TrimRight(cfg.Proxy.APIBaseURL, "/"),
+		ProxyAuthSecret:    cfg.ProxyAuth.Secret,
+		PluginName:         "turjmp",
+		RequiredPluginName: "turjmp",
+		MaxConnections:     cfg.Proxy.RDP.ConnectionLimit(),
+		IdleTimeout:        cfg.Proxy.RDP.IdleTimeout(),
 	}, nil
 }
 
@@ -301,7 +314,15 @@ func (e *FreeRDPEngine) Start(ctx context.Context, cfg NativeEngineConfig) (*Nat
 		close(events)
 		done <- err
 	}()
-	return handle, nil
+	select {
+	case err := <-done:
+		if err == nil {
+			err = errors.New("process exited during startup")
+		}
+		return nil, &NativeEngineError{Kind: NativeEngineErrorStart, Op: "start", Path: cfg.EnginePath, Err: err}
+	case <-time.After(100 * time.Millisecond):
+		return handle, nil
+	}
 }
 
 func execCommandFromNative(cmd nativeCommand) *exec.Cmd {
@@ -330,22 +351,61 @@ func validateNativeEngineRuntimeConfig(cfg NativeEngineConfig) error {
 	if strings.TrimSpace(cfg.KeyPath) == "" {
 		return &NativeEngineError{Kind: NativeEngineErrorConfig, Op: "private key", Err: errors.New("path is required")}
 	}
-	if strings.TrimSpace(cfg.Target.Host) == "" {
-		return &NativeEngineError{Kind: NativeEngineErrorConfig, Op: "target host", Err: errors.New("host is required")}
+	if strings.TrimSpace(cfg.APIBaseURL) == "" {
+		return &NativeEngineError{Kind: NativeEngineErrorConfig, Op: "api base url", Err: errors.New("url is required")}
 	}
-	if cfg.Target.Port <= 0 || cfg.Target.Port > 65535 {
-		return &NativeEngineError{Kind: NativeEngineErrorConfig, Op: "target port", Err: errors.New("port is invalid")}
-	}
-	if strings.TrimSpace(cfg.Target.Username) == "" {
-		return &NativeEngineError{Kind: NativeEngineErrorConfig, Op: "target user", Err: errors.New("username is required")}
-	}
-	if cfg.Target.Password == "" {
-		return &NativeEngineError{Kind: NativeEngineErrorConfig, Op: "target password", Err: errors.New("password is required")}
+	if strings.TrimSpace(cfg.ProxyAuthSecret) == "" {
+		return &NativeEngineError{Kind: NativeEngineErrorConfig, Op: "proxy auth", Err: errors.New("secret is required")}
 	}
 	return nil
 }
 
 func renderFreeRDPProxyConfig(cfg NativeEngineConfig) string {
+	return renderFreeRDPProxyDynamicConfig(cfg)
+}
+
+func renderFreeRDPProxyDynamicConfig(cfg NativeEngineConfig) string {
+	var b strings.Builder
+	pluginName := defaultString(cfg.PluginName, "turjmp")
+	requiredPluginName := defaultString(cfg.RequiredPluginName, pluginName)
+	writeINISection(&b, "Server")
+	writeINIKey(&b, "Host", cfg.ListenHost)
+	writeINIKey(&b, "Port", strconv.Itoa(cfg.ListenPort))
+	b.WriteByte('\n')
+
+	writeINISection(&b, "Target")
+	writeINIKey(&b, "FixedTarget", "false")
+	b.WriteByte('\n')
+
+	writeINISection(&b, "Security")
+	writeINIKey(&b, "ServerNlaSecurity", "false")
+	writeINIKey(&b, "ServerTlsSecurity", "true")
+	writeINIKey(&b, "ServerRdpSecurity", "true")
+	writeINIKey(&b, "ClientNlaSecurity", "true")
+	writeINIKey(&b, "ClientTlsSecurity", "true")
+	writeINIKey(&b, "ClientRdpSecurity", "true")
+	writeINIKey(&b, "ClientAllowFallbackToTls", "true")
+	b.WriteByte('\n')
+
+	writeINISection(&b, "Certificates")
+	writeINIKey(&b, "CertificateFile", cfg.CertPath)
+	writeINIKey(&b, "PrivateKeyFile", cfg.KeyPath)
+	b.WriteByte('\n')
+
+	writeINISection(&b, "Plugins")
+	writeINIKey(&b, "Modules", pluginName)
+	writeINIKey(&b, "Required", requiredPluginName)
+	b.WriteByte('\n')
+
+	writeINISection(&b, "Turjmp")
+	writeINIKey(&b, "APIBaseURL", strings.TrimRight(cfg.APIBaseURL, "/"))
+	writeINIKey(&b, "ProxyAuth", cfg.ProxyAuthSecret)
+	writeINIKey(&b, "MaxConnections", strconv.Itoa(cfg.MaxConnections))
+	writeINIKey(&b, "IdleTimeoutSeconds", strconv.Itoa(int(cfg.IdleTimeout.Seconds())))
+	return b.String()
+}
+
+func renderFreeRDPProxyFixedTargetConfig(cfg NativeEngineConfig) string {
 	var b strings.Builder
 	writeINISection(&b, "Server")
 	writeINIKey(&b, "Host", cfg.ListenHost)
@@ -436,7 +496,7 @@ func containsAny(value string, needles ...string) bool {
 }
 
 func redactNativeEngineLogLine(line string) string {
-	fields := []string{"Password", "TargetPassword", "PrivateKeyContent", "CertificateContent"}
+	fields := []string{"Password", "TargetPassword", "ProxyAuth", "PrivateKeyContent", "CertificateContent"}
 	for _, field := range fields {
 		line = redactKeyValue(line, field)
 	}

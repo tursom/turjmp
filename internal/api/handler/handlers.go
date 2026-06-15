@@ -263,6 +263,7 @@ func (h *Handler) DisableMyRDPProxyCredential(c *gin.Context) {
 		httpx.Error(c, err)
 		return
 	}
+	h.auditRDPProxyCredential(c, principal.UserID, "disable")
 	httpx.JSON(c, 200, status)
 }
 
@@ -288,11 +289,13 @@ func (h *Handler) ResetUserRDPProxyCredential(c *gin.Context) {
 
 // DisableUserRDPProxyCredential 禁用指定用户的原生 RDP 代理独立密码。
 func (h *Handler) DisableUserRDPProxyCredential(c *gin.Context) {
-	status, err := h.RDPCredentials.Disable(pathID(c, "id"))
+	userID := pathID(c, "id")
+	status, err := h.RDPCredentials.Disable(userID)
 	if err != nil {
 		httpx.Error(c, err)
 		return
 	}
+	h.auditRDPProxyCredential(c, userID, "disable")
 	httpx.JSON(c, 200, status)
 }
 
@@ -306,6 +309,7 @@ func (h *Handler) setRDPProxyCredential(c *gin.Context, userID int64) {
 		httpx.Error(c, err)
 		return
 	}
+	h.auditRDPProxyCredential(c, userID, "set")
 	httpx.JSON(c, 200, status)
 }
 
@@ -319,7 +323,24 @@ func (h *Handler) resetRDPProxyCredential(c *gin.Context, userID int64) {
 		httpx.Error(c, err)
 		return
 	}
+	h.auditRDPProxyCredential(c, userID, "reset")
 	httpx.JSON(c, 200, status)
+}
+
+func (h *Handler) auditRDPProxyCredential(c *gin.Context, targetUserID int64, action string) {
+	principal, err := httpx.MustPrincipal(c)
+	if err != nil {
+		return
+	}
+	detail, err := json.Marshal(gin.H{
+		"target_user_id": targetUserID,
+		"action":         action,
+		"source":         "web",
+	})
+	if err != nil {
+		detail = []byte(`{"source":"web","reason":"marshal_failed"}`)
+	}
+	_ = h.Store.Audit(&principal.UserID, "rdp_proxy_credential."+action, strconv.FormatInt(targetUserID, 10), c.ClientIP(), string(detail))
 }
 
 func bindRDPProxyCredentialPassword(c *gin.Context) (string, bool) {
@@ -1017,6 +1038,45 @@ func (h *Handler) ProxyResolveNativeRDP(c *gin.Context) {
 		return
 	}
 	httpx.JSON(c, http.StatusOK, result)
+}
+
+// ProxyStartNativeRDPSession validates mstsc credentials and creates a native RDP session.
+func (h *Handler) ProxyStartNativeRDPSession(c *gin.Context) {
+	if !h.proxyAuthorized(c) {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return
+	}
+	var req service.NativeRDPSessionStartInput
+	if !middleware.RequireJSON(c, &req) {
+		return
+	}
+	if strings.TrimSpace(req.RemoteAddr) == "" {
+		req.RemoteAddr = c.ClientIP()
+	}
+	result, err := h.NativeRDP.StartSession(req, h.Config.Proxy)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.Created(c, result)
+}
+
+// ProxyFinishNativeRDPSession marks a native RDP session finished once.
+func (h *Handler) ProxyFinishNativeRDPSession(c *gin.Context) {
+	if !h.proxyAuthorized(c) {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return
+	}
+	var req service.NativeRDPSessionFinishInput
+	if !middleware.RequireJSON(c, &req) {
+		return
+	}
+	result, err := h.NativeRDP.FinishSession(pathID(c, "id"), req)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, result)
 }
 
 // ProxyCreateSession 供代理组件创建 SSH 会话记录

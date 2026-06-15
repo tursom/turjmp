@@ -64,6 +64,8 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	v1.PATCH("/proxy/sessions/:id", h.ProxyUpdateSession)
 	v1.GET("/proxy/ssh/host-keys", h.ProxyHostKeys)
 	v1.POST("/proxy/rdp-native/resolve", h.ProxyResolveNativeRDP)
+	v1.POST("/proxy/rdp-native/sessions/start", h.ProxyStartNativeRDPSession)
+	v1.POST("/proxy/rdp-native/sessions/:id/finish", h.ProxyFinishNativeRDPSession)
 	v1.GET("/proxy/settings/:key", h.ProxyGetSetting)
 	v1.GET("/proxy/command-filter-acls", h.ProxyCommandFilterACLs)
 	v1.POST("/proxy/audit-logs", h.ProxyCreateAuditLog)

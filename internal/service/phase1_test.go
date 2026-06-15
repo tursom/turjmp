@@ -380,6 +380,67 @@ func TestNativeRDPResolverResolvesManagedPassword(t *testing.T) {
 	}
 }
 
+func TestNativeRDPSessionLifecycleAuditAndLimits(t *testing.T) {
+	store, closeFn := newMigratedTestStore(t)
+	defer closeFn()
+	box := phase1SecretBox(t)
+	user, asset, account := createNativeRDPResolveFixture(t, store, box)
+	resolver := NewNativeRDPResolverService(store, box, 8)
+	started, err := resolver.StartSession(NativeRDPSessionStartInput{
+		RouteUsername: fmt.Sprintf("%s#%d#%d", user.Username, asset.ID, account.ID),
+		Password:      "front-rdp-pass",
+		RemoteAddr:    "203.0.113.10:50000",
+	}, config.ProxyConfig{RDP: config.RDPProxyConfig{MaxConnections: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.SessionID == 0 || started.UserID != user.ID || started.Target.Address != asset.Address || started.Account.Secret != "target-rdp-password" {
+		t.Fatalf("unexpected start result: %#v", started)
+	}
+	session, err := store.GetSession(started.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Protocol != "rdp" || session.Type != "rdp" || session.LoginFrom != "rdp_client" || session.IsFinished {
+		t.Fatalf("unexpected native session: %#v", session)
+	}
+	if _, err := resolver.StartSession(NativeRDPSessionStartInput{
+		RouteUsername: fmt.Sprintf("%s#%d#%d", user.Username, asset.ID, account.ID),
+		Password:      "front-rdp-pass",
+		RemoteAddr:    "203.0.113.10:50001",
+	}, config.ProxyConfig{RDP: config.RDPProxyConfig{MaxConnections: 1}}); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("max connection err=%v, want forbidden", err)
+	}
+	finished, err := resolver.FinishSession(started.SessionID, NativeRDPSessionFinishInput{Reason: "disconnect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !finished.Finished || finished.Reason != "disconnect" {
+		t.Fatalf("unexpected finish result: %#v", finished)
+	}
+	second, err := resolver.FinishSession(started.SessionID, NativeRDPSessionFinishInput{Reason: "proxy_shutdown"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Finished {
+		t.Fatalf("finish should be idempotent: %#v", second)
+	}
+	logs, total, err := store.ListAuditLogs(repository.AuditLogFilter{Search: "rdp.native", Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total < 3 {
+		t.Fatalf("expected start/denied/complete audit logs, total=%d logs=%#v", total, logs)
+	}
+	for _, log := range logs {
+		for _, secret := range []string{"front-rdp-pass", "target-rdp-password", "password_hash"} {
+			if strings.Contains(log.Detail, secret) || strings.Contains(log.Action, secret) || strings.Contains(log.Resource, secret) {
+				t.Fatalf("audit leaked %q: %#v", secret, log)
+			}
+		}
+	}
+}
+
 func TestNativeRDPResolverDenials(t *testing.T) {
 	tests := []struct {
 		name     string
