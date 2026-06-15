@@ -220,6 +220,8 @@ type RDPProxyConfig struct {
 	NativePublicPort      int    `koanf:"native_public_port"`      // 生成 .rdp 文件时暴露给客户端的端口
 	NativeCertPath        string `koanf:"native_cert_path"`        // 原生 RDP MITM 前端证书路径
 	NativeKeyPath         string `koanf:"native_key_path"`         // 原生 RDP MITM 前端私钥路径
+	NativeEnginePath      string `koanf:"native_engine_path"`      // 原生 RDP MITM 引擎可执行文件路径
+	NativeWorkDir         string `koanf:"native_work_dir"`         // 原生 RDP MITM 引擎临时工作目录
 }
 
 // ListenAddr 返回 RDP WebSocket 代理监听地址。
@@ -284,6 +286,22 @@ func (c RDPProxyConfig) NativeClientPort() int {
 		return 33890
 	}
 	return c.NativePublicPort
+}
+
+// NativeEngineCommand 返回原生 RDP MITM 引擎命令。
+func (c RDPProxyConfig) NativeEngineCommand() string {
+	if c.NativeEnginePath == "" {
+		return "freerdp-proxy"
+	}
+	return c.NativeEnginePath
+}
+
+// NativeEngineWorkDir 返回原生 RDP MITM 引擎工作目录。
+func (c RDPProxyConfig) NativeEngineWorkDir() string {
+	if c.NativeWorkDir == "" {
+		return "./run/rdp-native"
+	}
+	return c.NativeWorkDir
 }
 
 // TOTPConfig TOTP 多因子认证配置。
@@ -402,6 +420,8 @@ func defaults() map[string]any {
 		"proxy.rdp.native_public_port":      33890,
 		"proxy.rdp.native_cert_path":        "",
 		"proxy.rdp.native_key_path":         "",
+		"proxy.rdp.native_engine_path":      "freerdp-proxy",
+		"proxy.rdp.native_work_dir":         "./run/rdp-native",
 		"totp.issuer":                       "Turjmp",
 		"logging.level":                     "info",
 		"logging.encoding":                  "json",

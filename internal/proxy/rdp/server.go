@@ -23,7 +23,7 @@ import (
 type Server struct {
 	cfg     config.Config           // 全局配置（监听地址、超时、限制阈值等）
 	api     apiClient               // 后端 API 客户端（token 验证、session 生命周期）
-	storage recorder.StorageBackend  // 录制文件持久化存储
+	storage recorder.StorageBackend // 录制文件持久化存储
 	limit   *limiter                // 并发会话限流器
 	http    *http.Server            // HTTP 服务器实例
 	mu      sync.Mutex              // 并发保护锁
@@ -64,6 +64,9 @@ func NewServerWithDeps(cfg config.Config, api apiClient, storage recorder.Storag
 
 // Start starts the RDP WebSocket HTTP listener and exits on context cancellation.
 func (s *Server) Start(ctx context.Context) error {
+	if err := ValidateNativeEngineConfig(s.cfg); err != nil {
+		return err
+	}
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- s.http.ListenAndServe()
@@ -302,12 +305,12 @@ func findRecordingFile(dir, recordingName string) (string, error) {
 
 // sessionTunnel 封装 guac 隧道，管理会话生命周期：关闭时通过 sync.Once 保证只执行一次 finish+release 链。
 type sessionTunnel struct {
-	guac.Tunnel                          // 嵌入 guac 隧道接口
-	release       func()                 // 限流器释放回调
+	guac.Tunnel                                              // 嵌入 guac 隧道接口
+	release       func()                                     // 限流器释放回调
 	finish        func(context.Context, int64, string) error // session 结束回调
-	sessionID     int64                  // 后端会话 ID
-	recordingName string                 // 录制文件名称
-	once          sync.Once              // 保证 Close 逻辑只执行一次
+	sessionID     int64                                      // 后端会话 ID
+	recordingName string                                     // 录制文件名称
+	once          sync.Once                                  // 保证 Close 逻辑只执行一次
 }
 
 // Close 通过 sync.Once 确保只关闭一次隧道，然后依次执行 session 结束和限流释放。
