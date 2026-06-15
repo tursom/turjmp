@@ -26,6 +26,18 @@ export interface MFAVerifyRequest {
   code: string
 }
 
+export interface RDPProxyCredentialStatus {
+  user_id: number
+  configured: boolean
+  enabled: boolean
+  updated_at?: string
+  disabled_at?: string
+}
+
+export interface RDPProxyCredentialPasswordInput {
+  password: string
+}
+
 // Domain entities
 export interface User {
   id: number

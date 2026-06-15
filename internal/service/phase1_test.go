@@ -761,7 +761,8 @@ func TestPhase1TokenDefaultsPermissionsAndReusableVerify(t *testing.T) {
 //  3. 授予 connect 权限后测试 mysql/postgres/rdp 的 SDK URL 生成
 //  4. 验证 mysql 命令行包含 username#token 格式（无密钥泄露）
 //  5. 验证 postgres 命令行包含 -d appdb 参数
-//  6. 验证 RDP 回退到 Web 客户端（非 .rdp 文件）
+//  6. 验证 RDP 默认回退到 Web 客户端（非 .rdp 文件）
+//  7. 验证启用原生 RDP 后生成 mstsc .rdp 文件且不泄露 token/密码
 func TestSDKURLBuildsNativeConnectionFiles(t *testing.T) {
 	store, closeFn := newMigratedTestStore(t)
 	defer closeFn()
@@ -828,6 +829,69 @@ func TestSDKURLBuildsNativeConnectionFiles(t *testing.T) {
 	}
 	if rdp.ConnectMethod != "web_rdp" || rdp.WebURL == "" || strings.Contains(rdp.Content, ".rdp") {
 		t.Fatalf("rdp should use web fallback sdk: %#v", rdp)
+	}
+
+	rdpAsset, rdpAccount := createPhase1RDPAssetAccount(t, store, box)
+	rdpPermission := domain.AssetPermission{Name: "connect native rdp sdk", Actions: "connect", IsActive: true}
+	if err := store.CreatePermission(&rdpPermission, repository.PermissionLinks{
+		UserIDs:    []int64{user.ID},
+		AssetIDs:   []int64{rdpAsset.ID},
+		AccountIDs: []int64{rdpAccount.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	nativeRDP, err := tokens.BuildSDKURL(user.ID, SDKURLInput{
+		IssueTokenInput: IssueTokenInput{AssetID: rdpAsset.ID, AccountID: rdpAccount.ID, Protocol: "rdp"},
+		ProxyHost:       "ignored.example.test",
+	}, config.ProxyConfig{
+		APIBaseURL: "http://api.example.test:8080",
+		RDP: config.RDPProxyConfig{
+			NativeEnabled:    true,
+			NativePublicHost: "rdp.example.test",
+			NativePublicPort: 33900,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nativeRDP.ConnectMethod != "rdp_client" || nativeRDP.Filename != "turjmp-rdp.rdp" || nativeRDP.MimeType != "application/x-rdp" {
+		t.Fatalf("unexpected native rdp sdk metadata: %#v", nativeRDP)
+	}
+	if nativeRDP.Token != "" || !nativeRDP.ExpiresAt.IsZero() || nativeRDP.ExpiresIn != 0 {
+		t.Fatalf("native rdp sdk should not issue legacy connection token: %#v", nativeRDP)
+	}
+	if nativeRDP.Host != "rdp.example.test" || nativeRDP.Port != 33900 {
+		t.Fatalf("unexpected native rdp endpoint: %#v", nativeRDP)
+	}
+	if !strings.Contains(nativeRDP.Content, "full address:s:rdp.example.test:33900") {
+		t.Fatalf("native rdp file missing proxy endpoint: %q", nativeRDP.Content)
+	}
+	routeUsername := fmt.Sprintf("admin#%d#%d", rdpAsset.ID, rdpAccount.ID)
+	if !strings.Contains(nativeRDP.Content, "username:s:"+routeUsername) {
+		t.Fatalf("native rdp file missing route username %q: %q", routeUsername, nativeRDP.Content)
+	}
+	for _, leaked := range []string{"target-rdp-password", "front-rdp-pass", rdpAccount.Secret} {
+		if leaked != "" && strings.Contains(nativeRDP.Content, leaked) {
+			t.Fatalf("native rdp file leaked secret/token %q: %q", leaked, nativeRDP.Content)
+		}
+	}
+
+	nativeRDPFallbackHost, err := tokens.BuildSDKURL(user.ID, SDKURLInput{
+		IssueTokenInput: IssueTokenInput{AssetID: rdpAsset.ID, AccountID: rdpAccount.ID, Protocol: "rdp"},
+		ProxyHost:       "fallback.example.test:443",
+	}, config.ProxyConfig{
+		APIBaseURL: "http://api.example.test:8080",
+		RDP: config.RDPProxyConfig{
+			NativeEnabled:    true,
+			NativePublicPort: 33901,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nativeRDPFallbackHost.Host != "fallback.example.test" ||
+		!strings.Contains(nativeRDPFallbackHost.Content, "full address:s:fallback.example.test:33901") {
+		t.Fatalf("native rdp should fall back to proxy_host when native_public_host is empty: %#v", nativeRDPFallbackHost)
 	}
 }
 

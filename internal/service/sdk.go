@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -15,9 +16,9 @@ import (
 // SDKURLInput 原生客户端连接信息请求的输入参数。用于描述用户请求生成原生客户端连接 URL 或下载文件所需的全部信息，包含目标资产与账户的协议、连接方式、代理主机地址以及输出格式。
 // 嵌入 IssueTokenInput 以复用连接令牌签发所需的资产 ID、账户 ID、协议和连接方式等字段；ProxyHost 允许前端显式指定代理对外地址，Format 指定输出格式（如 "file" 表示下载文件）。
 type SDKURLInput struct {
-	IssueTokenInput                        // 嵌入的令牌签发参数，包含 AssetID、AccountID、Protocol、ConnectMethod 等
+	IssueTokenInput        // 嵌入的令牌签发参数，包含 AssetID、AccountID、Protocol、ConnectMethod 等
 	ProxyHost       string `json:"proxy_host" form:"proxy_host"` // 显式指定的代理服务对外地址（host:port），为空时自动从 API 基础地址解析
-	Format          string `json:"format" form:"format"`          // 输出格式，如 "file" 表示返回文件下载内容
+	Format          string `json:"format" form:"format"`         // 输出格式，如 "file" 表示返回文件下载内容
 }
 
 // SDKURLResult 原生客户端连接信息的完整响应载荷。包含连接令牌、服务端地址端口、生成的命令行文本、可下载文件内容以及（RDP 场景下的）WebSocket URL。
@@ -28,31 +29,31 @@ type SDKURLResult struct {
 	ExpiresIn int       `json:"expires_in"` // 令牌剩余有效秒数，值为 0 表示已过期
 	Protocol  string    `json:"protocol"`   // 小写的协议名称，如 "ssh"、"mysql"、"postgres"、"rdp"
 	// ConnectMethod 连接方式标识，用于区分原生客户端连接方式：
-	//   ssh: "ssh_client", mysql: "mysql_client", postgres: "postgres_client", rdp: "web_rdp"
+	//   ssh: "ssh_client", mysql: "mysql_client", postgres: "postgres_client", rdp: "rdp_client" or "web_rdp"
 	ConnectMethod string `json:"connect_method"`
-	Host          string `json:"host"`     // 代理服务对外暴露的主机地址（不含端口），供客户端连接使用
-	Port          int    `json:"port"`     // 代理服务对外暴露的端口号，对应各协议的代理监听端口
-	Command       string `json:"command"`  // 可直接复制使用的命令行文本，如 "ssh -p 2222 -l user#token host"
-	Filename      string `json:"filename"` // 建议的下载文件名（含扩展名），如 "turjmp-ssh.sh"
-	MimeType      string `json:"mime_type"` // 文件内容的 MIME 类型，如 "text/x-shellscript" 或 "text/plain"
-	Content       string `json:"content"`  // 文件内容，供前端直接下载或复制使用
+	Host          string `json:"host"`              // 代理服务对外暴露的主机地址（不含端口），供客户端连接使用
+	Port          int    `json:"port"`              // 代理服务对外暴露的端口号，对应各协议的代理监听端口
+	Command       string `json:"command"`           // 可直接复制使用的命令行文本，如 "ssh -p 2222 -l user#token host"
+	Filename      string `json:"filename"`          // 建议的下载文件名（含扩展名），如 "turjmp-ssh.sh"
+	MimeType      string `json:"mime_type"`         // 文件内容的 MIME 类型，如 "text/x-shellscript" 或 "text/plain"
+	Content       string `json:"content"`           // 文件内容，供前端直接下载或复制使用
 	WebURL        string `json:"web_url,omitempty"` // RDP 协议的 WebSocket 连接 URL，仅 rdp 协议时填充
 }
 
-// BuildSDKURL 签发连接令牌并生成原生客户端连接内容（命令行、下载文件、RDP Web URL）。
+// BuildSDKURL 生成原生客户端连接内容（命令行、下载文件、RDP Web URL）。
+// SSH/MySQL/PostgreSQL 和 Web RDP 会签发短期连接令牌；原生 RDP MITM 使用独立 RDP 代理密码认证，不签发旧连接令牌。
 //
 // 完整流程：
 //  1. 规范化协议名称（canonicalSDKProtocol），空协议默认使用 "ssh"
 //  2. 自动推断连接方式（sdkDefaultConnectMethod），如未指定则根据协议自动匹配
 //  3. 解析代理监听端口（sdkProxyPort），从配置中取出对应协议的代理监听端口，若协议不支持则返回 ErrInvalidArgument
-//  4. 调用 TokenService.Issue 签发连接令牌，校验用户对目标资产和账户的 connect 权限
-//  5. 解析代理主机地址（sdkHost），优先使用用户显式指定的 proxy_host，其次从 API 基础 URL 解析，最后回退到 127.0.0.1
-//  6. 根据令牌中的账户 ID 查询账户信息，获取用户名和数据库名
-//  7. 按协议生成命令行内容和下载文件：
+//  4. 解析代理主机地址（sdkHost），优先使用用户显式指定的 proxy_host，其次从 API 基础 URL 解析，最后回退到 127.0.0.1
+//  5. 原生 RDP MITM 直接校验 connect 权限并生成 .rdp；其他协议调用 TokenService.Issue 签发连接令牌
+//  6. 按协议生成命令行内容和下载文件：
 //     - ssh: 生成 ssh 命令和 .sh 可执行脚本
 //     - mysql: 生成 mysql 命令和纯文本内容
 //     - postgres/postgresql: 生成 psql 命令（若关联数据库则附加 -d 参数）
-//     - rdp: 生成 WebSocket URL 和 .url 快捷方式文件
+//     - rdp: 原生 RDP 开启时生成 .rdp 文件，否则生成 WebSocket URL 和 .url 快捷方式文件
 //     - 其他协议返回 ErrInvalidArgument
 //
 // 参数说明：
@@ -67,8 +68,10 @@ func (s *TokenService) BuildSDKURL(userID int64, input SDKURLInput, cfg config.P
 	if input.Protocol == "" {
 		input.Protocol = "ssh"
 	}
-	// 自动推断连接方式：根据协议映射到对应的客户端类型
-	if input.ConnectMethod == "" {
+	// 自动推断连接方式：根据协议映射到对应的客户端类型。
+	if input.Protocol == "rdp" && cfg.RDP.NativeEnabled {
+		input.ConnectMethod = "rdp_client"
+	} else if input.ConnectMethod == "" {
 		input.ConnectMethod = sdkDefaultConnectMethod(input.Protocol)
 	}
 	// 获取对应协议的代理监听端口，若协议不支持则端口为 0
@@ -76,14 +79,16 @@ func (s *TokenService) BuildSDKURL(userID int64, input SDKURLInput, cfg config.P
 	if port == 0 {
 		return SDKURLResult{}, domain.ErrInvalidArgument
 	}
+	host := sdkHost(input.ProxyHost, cfg.APIBaseURL)
+	if input.Protocol == "rdp" && cfg.RDP.NativeEnabled {
+		return s.buildNativeRDPSDKURL(userID, input, cfg, host, port)
+	}
 	// 签发连接令牌，校验用户对目标资产和账户的 connect 权限
 	token, err := s.Issue(userID, input.IssueTokenInput)
 	if err != nil {
 		return SDKURLResult{}, err
 	}
 	protocol := strings.ToLower(token.Protocol)
-	// 解析代理对外地址：优先用户指定的 proxy_host，其次 API 基础 URL，最后回退 127.0.0.1
-	host := sdkHost(input.ProxyHost, cfg.APIBaseURL)
 	result := SDKURLResult{
 		Token:         token.Value,
 		ExpiresAt:     token.ExpiresAt,
@@ -128,7 +133,7 @@ func (s *TokenService) BuildSDKURL(userID int64, input SDKURLInput, cfg config.P
 		result.MimeType = "text/plain"
 		result.Content = result.Command + "\n"
 	case "rdp":
-		// RDP 协议不生成命令行，改为生成 WebSocket URL 供 Web RDP 客户端使用
+		// RDP 原生代理未启用时保持 Web RDP 兼容输出。
 		result.WebURL = sdkWebURL(cfg.RDP.ListenAddr(), host, token.Value)
 		result.Command = result.WebURL
 		result.Filename = "turjmp-rdp.url"
@@ -138,6 +143,56 @@ func (s *TokenService) BuildSDKURL(userID int64, input SDKURLInput, cfg config.P
 		return SDKURLResult{}, domain.ErrInvalidArgument
 	}
 	return result, nil
+}
+
+func (s *TokenService) buildNativeRDPSDKURL(userID int64, input SDKURLInput, cfg config.ProxyConfig, fallbackHost string, port int) (SDKURLResult, error) {
+	user, err := s.store.GetUser(userID)
+	if err != nil {
+		return SDKURLResult{}, err
+	}
+	if !user.IsActive {
+		return SDKURLResult{}, domain.ErrUnauthorized
+	}
+	asset, err := s.store.GetAsset(input.AssetID)
+	if err != nil {
+		return SDKURLResult{}, err
+	}
+	account, err := s.store.GetAssetAccount(input.AssetID, input.AccountID)
+	if err != nil {
+		return SDKURLResult{}, err
+	}
+	if !asset.IsActive || !account.IsActive {
+		return SDKURLResult{}, domain.ErrForbidden
+	}
+	ok, err := s.store.HasAssetPermission(userID, input.AssetID, input.AccountID, "connect")
+	if err != nil {
+		return SDKURLResult{}, err
+	}
+	if !ok {
+		return SDKURLResult{}, domain.ErrForbidden
+	}
+	if _, err := s.store.GetAssetProtocolPort(input.AssetID, "rdp"); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return SDKURLResult{}, domain.ErrForbidden
+		}
+		return SDKURLResult{}, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(account.SecretType), "password") {
+		return SDKURLResult{}, domain.ErrForbidden
+	}
+	host := sdkNativeRDPHost(fallbackHost, cfg)
+	filename := "turjmp-rdp.rdp"
+	routeUsername := fmt.Sprintf("%s#%d#%d", user.Username, input.AssetID, input.AccountID)
+	return SDKURLResult{
+		Protocol:      "rdp",
+		ConnectMethod: "rdp_client",
+		Host:          host,
+		Port:          port,
+		Command:       fmt.Sprintf("mstsc %s", shellQuote(filename)),
+		Filename:      filename,
+		MimeType:      "application/x-rdp",
+		Content:       sdkRDPFileContent(host, port, routeUsername),
+	}, nil
 }
 
 // sdkDefaultConnectMethod 根据协议返回对应的默认连接方式标识。
@@ -198,6 +253,9 @@ func sdkProxyPort(protocol string, cfg config.ProxyConfig) int {
 	case "postgres", "postgresql":
 		return listenPort(cfg.DB.PostgresListenAddr(), 5437)
 	case "rdp":
+		if cfg.RDP.NativeEnabled {
+			return cfg.RDP.NativeClientPort()
+		}
 		return listenPort(cfg.RDP.ListenAddr(), 33891)
 	default:
 		return 0
@@ -286,12 +344,36 @@ func sdkWebURL(listenAddr, host, token string) string {
 	return fmt.Sprintf("%s://%s/ws/rdp/?token=%s", scheme, net.JoinHostPort(host, strconv.Itoa(port)), url.QueryEscape(token))
 }
 
+func sdkNativeRDPHost(fallbackHost string, cfg config.ProxyConfig) string {
+	if strings.TrimSpace(cfg.RDP.NativePublicHost) != "" {
+		return strings.TrimSpace(cfg.RDP.NativePublicHost)
+	}
+	return fallbackHost
+}
+
+func sdkRDPFileContent(host string, port int, routeUsername string) string {
+	address := net.JoinHostPort(host, strconv.Itoa(port))
+	lines := []string{
+		"screen mode id:i:2",
+		"use multimon:i:0",
+		"desktopwidth:i:0",
+		"desktopheight:i:0",
+		"session bpp:i:32",
+		"full address:s:" + address,
+		"prompt for credentials:i:1",
+		"authentication level:i:2",
+		"enablecredsspsupport:i:1",
+		"username:s:" + routeUsername,
+	}
+	return strings.Join(lines, "\r\n") + "\r\n"
+}
+
 // shellQuote 对 Shell 参数值进行安全引用，防止命令行注入。
 //
 // 引用策略：
-//  1. 空字符串返回 ''（空单引号对）
+//  1. 空字符串返回两个单引号表示的空参数
 //  2. 若值仅包含安全字符（字母、数字、'-'、'_'、'.'、':'、'/'、'#'），直接返回原值，无需引用
-//  3. 其他情况使用单引号包裹，内部单引号通过 '\'' 转义（结束单引号 → 转义的单引号 → 重新开始单引号）
+//  3. 其他情况使用单引号包裹，并转义内部单引号
 //
 // 参数：
 //   - value: 待引用的 Shell 参数原始值

@@ -1,5 +1,12 @@
 import client from './client'
-import type { AccessMap, LoginRequest, LoginResult, RefreshRequest } from '@/types'
+import type {
+  AccessMap,
+  LoginRequest,
+  LoginResult,
+  RDPProxyCredentialPasswordInput,
+  RDPProxyCredentialStatus,
+  RefreshRequest,
+} from '@/types'
 
 export async function login(data: LoginRequest): Promise<LoginResult> {
   const res = await client.post<LoginResult>('/auth/login', data)
@@ -27,4 +34,28 @@ export async function mfaSetup(): Promise<{ secret: string; url: string }> {
 
 export async function mfaVerify(code: string): Promise<void> {
   await client.post('/auth/mfa/verify', { code })
+}
+
+export async function getRDPProxyCredential(): Promise<RDPProxyCredentialStatus> {
+  const res = await client.get<RDPProxyCredentialStatus>('/auth/rdp-proxy-credential')
+  return res.data
+}
+
+export async function setRDPProxyCredential(
+  data: RDPProxyCredentialPasswordInput,
+): Promise<RDPProxyCredentialStatus> {
+  const res = await client.put<RDPProxyCredentialStatus>('/auth/rdp-proxy-credential', data)
+  return res.data
+}
+
+export async function resetRDPProxyCredential(
+  data: RDPProxyCredentialPasswordInput,
+): Promise<RDPProxyCredentialStatus> {
+  const res = await client.post<RDPProxyCredentialStatus>('/auth/rdp-proxy-credential/reset', data)
+  return res.data
+}
+
+export async function disableRDPProxyCredential(): Promise<RDPProxyCredentialStatus> {
+  const res = await client.delete<RDPProxyCredentialStatus>('/auth/rdp-proxy-credential')
+  return res.data
 }

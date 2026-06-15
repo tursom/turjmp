@@ -27,6 +27,7 @@ const menuItems: MenuItem[] = [
   { index: '/permissions', icon: Lock, label: '资产授权', access: 'permissions' },
   { index: '/sessions', icon: Connection, label: '会话', access: 'sessions' },
   { index: '/audit-logs', icon: Document, label: '审计日志', access: 'audit_logs' },
+  { index: '/security', icon: Lock, label: '个人安全' },
   { index: '/settings', icon: Tools, label: '系统设置', access: 'settings' },
 ]
 

@@ -38,6 +38,7 @@ const ACCESSIBLE_ROUTE_FALLBACKS = [
   { path: '/sessions', access: 'sessions' },
   { path: '/audit-logs', access: 'audit_logs' },
   { path: '/assets', access: 'assets' },
+  { path: '/security' },
   { path: '/users', access: 'users' },
   { path: '/roles', access: 'roles' },
   { path: '/permissions', access: 'permissions' },
@@ -177,6 +178,12 @@ const routes = [
         name: 'PermissionEdit',
         component: () => import('@/views/permissions/AssetPermissionFormView.vue'),
         meta: { title: '编辑授权', access: 'permission_update' },
+      },
+      {
+        path: 'security',
+        name: 'Security',
+        component: () => import('@/views/security/SecurityView.vue'),
+        meta: { title: '个人安全' },
       },
       {
         path: 'sessions',

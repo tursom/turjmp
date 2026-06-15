@@ -10,7 +10,7 @@
 
     <el-alert
       v-else-if="protocolOptions.length === 0"
-      title="该资产暂无可用的 SSH/MySQL/PostgreSQL 原生连接协议"
+      title="该资产暂无可用的 SSH/MySQL/PostgreSQL/RDP 原生连接协议"
       type="info"
       :closable="false"
       class="panel-alert"
@@ -66,15 +66,30 @@
 
         <el-form-item>
           <el-button
+            v-if="selectedProtocolRequiresCredential"
+            plain
+            @click="router.push('/security')"
+          >
+            设置 RDP 代理密码
+          </el-button>
+          <el-button
             type="primary"
             native-type="submit"
             :loading="generating"
-            :disabled="!form.protocol || !form.accountId || !asset.is_active"
+            :disabled="generateDisabled"
           >
             生成连接信息
           </el-button>
         </el-form-item>
       </el-form>
+
+      <el-alert
+        v-if="disabledReason"
+        :title="disabledReason"
+        type="warning"
+        :closable="false"
+        class="panel-alert"
+      />
 
       <el-empty
         v-if="accountOptions.length === 0 && !accountsLoading"
@@ -105,9 +120,9 @@
 
         <div class="command-block">
           <div class="command-header">
-            <span>连接命令</span>
+            <span>{{ result.protocol === 'rdp' && result.connect_method === 'rdp_client' ? '连接文件' : '连接命令' }}</span>
             <div>
-              <el-button size="small" @click="copyCommand">
+              <el-button v-if="result.command" size="small" @click="copyCommand">
                 <el-icon><DocumentCopy /></el-icon>
                 复制
               </el-button>
@@ -117,7 +132,7 @@
               </el-button>
             </div>
           </div>
-          <pre>{{ result.command }}</pre>
+          <pre>{{ resultPreview }}</pre>
         </div>
       </div>
     </template>
@@ -126,15 +141,17 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { DocumentCopy, Download } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import * as authApi from '@/api/auth'
 import * as assetsApi from '@/api/assets'
 import * as tokensApi from '@/api/tokens'
-import type { Account, Asset, PlatformProtocol, SDKURLResult } from '@/types'
+import type { Account, Asset, PlatformProtocol, RDPProxyCredentialStatus, SDKURLResult } from '@/types'
 import { useAuthStore } from '@/stores/auth'
 import { normalizeProtocol } from '@/utils/terminal'
 
-type NativeProtocol = 'ssh' | 'mysql' | 'postgres'
+type NativeProtocol = 'ssh' | 'mysql' | 'postgres' | 'rdp'
 
 const props = defineProps<{
   asset: Asset
@@ -142,10 +159,14 @@ const props = defineProps<{
 }>()
 
 const authStore = useAuthStore()
+const router = useRouter()
 const accounts = ref<Account[]>([])
 const accountsLoading = ref(false)
 const generating = ref(false)
 const result = ref<SDKURLResult | null>(null)
+const rdpCredential = ref<RDPProxyCredentialStatus | null>(null)
+const rdpCredentialLoading = ref(false)
+const rdpCredentialError = ref('')
 const form = reactive({
   protocol: '' as NativeProtocol | '',
   accountId: undefined as number | undefined,
@@ -170,6 +191,33 @@ const protocolOptions = computed<NativeProtocol[]>(() => {
 })
 
 const accountOptions = computed(() => accounts.value.filter((account) => account.is_active))
+const selectedAccount = computed(() => accountOptions.value.find((account) => account.id === form.accountId))
+const selectedProtocolRequiresCredential = computed(() => form.protocol === 'rdp' && !rdpCredentialReady.value)
+const rdpCredentialReady = computed(() => (
+  rdpCredential.value?.configured === true && rdpCredential.value.enabled === true
+))
+const disabledReason = computed(() => {
+  if (!props.asset.is_active) return '资产已停用，不能生成原生连接信息'
+  if (!form.protocol) return '请选择协议'
+  if (!form.accountId) return '请选择账号'
+  if (!selectedAccount.value) return '当前资产没有可用账号'
+  if (form.protocol === 'rdp') {
+    if (rdpCredentialLoading.value) return '正在检查 RDP 代理密码状态'
+    if (rdpCredentialError.value) return rdpCredentialError.value
+    if (!rdpCredential.value?.configured) return '当前用户尚未设置 RDP 代理密码'
+    if (!rdpCredential.value.enabled) return '当前用户的 RDP 代理密码已禁用'
+    if (selectedAccount.value.secret_type !== 'password') return 'RDP 原生连接仅支持密码类型账号'
+  }
+  return ''
+})
+const generateDisabled = computed(() => generating.value || disabledReason.value !== '')
+const resultPreview = computed(() => {
+  if (!result.value) return ''
+  if (result.value.protocol === 'rdp' && result.value.connect_method === 'rdp_client') {
+    return result.value.content || `${result.value.host}:${result.value.port}`
+  }
+  return result.value.command
+})
 
 function normalizeNativeProtocol(protocol?: string): NativeProtocol | null {
   switch (normalizeProtocol(protocol)) {
@@ -180,6 +228,8 @@ function normalizeNativeProtocol(protocol?: string): NativeProtocol | null {
     case 'postgres':
     case 'postgresql':
       return 'postgres'
+    case 'rdp':
+      return 'rdp'
     default:
       return null
   }
@@ -193,6 +243,8 @@ function protocolLabel(protocol: NativeProtocol): string {
       return 'MySQL'
     case 'postgres':
       return 'PostgreSQL'
+    case 'rdp':
+      return 'RDP'
   }
 }
 
@@ -242,8 +294,27 @@ async function loadAccounts() {
   }
 }
 
+async function loadRDPCredentialStatus() {
+  if (!canGenerate.value || !protocolOptions.value.includes('rdp')) {
+    rdpCredential.value = null
+    rdpCredentialError.value = ''
+    return
+  }
+  rdpCredentialLoading.value = true
+  rdpCredentialError.value = ''
+  try {
+    rdpCredential.value = await authApi.getRDPProxyCredential()
+  } catch (err: unknown) {
+    rdpCredential.value = null
+    rdpCredentialError.value = err instanceof Error ? err.message : '加载 RDP 代理密码状态失败'
+    ElMessage.error(rdpCredentialError.value)
+  } finally {
+    rdpCredentialLoading.value = false
+  }
+}
+
 async function generateConnection() {
-  if (!form.protocol || form.accountId === undefined) return
+  if (generateDisabled.value || !form.protocol || form.accountId === undefined) return
   generating.value = true
   try {
     result.value = await tokensApi.createSDKUrl({
@@ -276,7 +347,10 @@ function downloadFile() {
   const link = globalThis.document.createElement('a')
   link.href = globalThis.URL.createObjectURL(blob)
   link.download = result.value.filename || `turjmp-${result.value.protocol}.txt`
+  link.style.display = 'none'
+  globalThis.document.body.appendChild(link)
   link.click()
+  link.remove()
   globalThis.URL.revokeObjectURL(link.href)
 }
 
@@ -286,15 +360,20 @@ watch(
     result.value = null
     form.accountId = undefined
     void loadAccounts()
+    void loadRDPCredentialStatus()
   },
 )
 
 watch(protocolOptions, syncDefaultSelection)
+watch(protocolOptions, () => {
+  void loadRDPCredentialStatus()
+})
 watch(accountOptions, syncDefaultSelection)
 
 onMounted(() => {
   syncDefaultSelection()
   void loadAccounts()
+  void loadRDPCredentialStatus()
 })
 </script>
 
