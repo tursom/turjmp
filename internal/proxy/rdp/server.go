@@ -2,6 +2,7 @@ package rdpproxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"github.com/wwt/guac"
 
 	"github.com/tursom/turjmp/internal/config"
+	"github.com/tursom/turjmp/internal/health"
 	"github.com/tursom/turjmp/internal/recorder"
 )
 
@@ -51,10 +53,7 @@ func NewServerWithDeps(cfg config.Config, api apiClient, storage recorder.Storag
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/ws/rdp/", s.newWebSocketHandler())
-	mux.Handle("/health", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	}))
+	mux.Handle("/health", http.HandlerFunc(s.health))
 	s.http = &http.Server{
 		Addr:              cfg.Proxy.RDP.ListenAddr(),
 		Handler:           mux,
@@ -140,6 +139,37 @@ func (s *Server) stopNativeEngine() {
 	if handle != nil {
 		_ = handle.Stop()
 	}
+}
+
+func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
+	components := map[string]health.Component{
+		"web_rdp":    health.Ready(),
+		"native_rdp": health.Disabled(),
+	}
+	if s.cfg.Proxy.RDP.NativeEnabled {
+		components["native_rdp"] = s.nativeHealth()
+	}
+	ready := health.NewReadiness(components)
+	status := http.StatusOK
+	if ready.Status != health.StatusReady {
+		status = http.StatusServiceUnavailable
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(ready)
+}
+
+func (s *Server) nativeHealth() health.Component {
+	if err := ValidateNativeEngineConfig(s.cfg); err != nil {
+		return health.NotReady(err)
+	}
+	s.mu.Lock()
+	handle := s.native
+	s.mu.Unlock()
+	if handle == nil || !handle.Running() {
+		return health.NotReady(errors.New("native rdp engine is not running"))
+	}
+	return health.Ready()
 }
 
 // newWebSocketHandler 创建 WebSocket 处理器，将每个 WebSocket 连接委托给 connect 建立 guac 隧道。

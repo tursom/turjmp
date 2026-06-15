@@ -257,6 +257,30 @@ func TestFreeRDPEngineContextCancelClassifiesWait(t *testing.T) {
 	}
 }
 
+func TestNativeEngineHandleRunningReflectsProcessExit(t *testing.T) {
+	dir := t.TempDir()
+	enginePath := filepath.Join(dir, "fake-freerdp-proxy")
+	if err := os.WriteFile(enginePath, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cfg := nativeEngineTestConfig(t)
+	cfg.EnginePath = enginePath
+	cfg.WorkDir = filepath.Join(dir, "work")
+	handle, err := NewFreeRDPEngine().Start(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handle.Running() {
+		t.Fatal("expected handle to report running after startup")
+	}
+	cancel()
+	_ = handle.Wait()
+	if handle.Running() {
+		t.Fatal("expected handle to stop reporting running after process exit")
+	}
+}
+
 func TestClassifyNativeEngineEvents(t *testing.T) {
 	tests := []struct {
 		line string

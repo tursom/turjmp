@@ -46,8 +46,10 @@ proxy:
     native_addr: ":33890"
     native_public_host: ""
     native_public_port: 33890
-    native_cert_path: ""
-    native_key_path: ""
+    native_cert_path: "/keys/rdp-native.crt"
+    native_key_path: "/keys/rdp-native.key"
+    native_engine_path: "/opt/freerdp/bin/freerdp-proxy"
+    native_work_dir: "/var/lib/turjmp/rdp-native"
 totp:
   issuer: "Turjmp"
 logging:

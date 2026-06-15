@@ -1,0 +1,6 @@
+services:
+  turjmp:
+    environment:
+      TURJMP_PROXY__RDP__NATIVE_ENABLED: "true"
+    ports:
+      - "${TURJMP_RDP_NATIVE_PORT:-33890}:33890"

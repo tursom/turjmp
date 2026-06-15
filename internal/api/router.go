@@ -3,6 +3,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,16 +16,25 @@ import (
 	"github.com/tursom/turjmp/internal/api/handler"
 	"github.com/tursom/turjmp/internal/api/middleware"
 	"github.com/tursom/turjmp/internal/config"
+	"github.com/tursom/turjmp/internal/health"
 	// dbproxy 数据库代理服务实现，封装 MySQL 协议代理和 Web DB 终端功能
 	dbproxy "github.com/tursom/turjmp/internal/proxy/db"
 	sshproxy "github.com/tursom/turjmp/internal/proxy/ssh"
 	"github.com/tursom/turjmp/internal/repository"
 )
 
+type RouterOptions struct {
+	ExpectRDPProxy bool
+}
+
 // NewRouter 创建并配置 Gin 路由引擎，注册全局中间件、健康检查端点、Prometheus指标端点、
 // 公开 API（登录/刷新/代理）、JWT认证端点（登出/MFA）和 JWT+RBAC 安全端点（用户/角色/资产/权限/会话/配置/审计）。
 // cfg 为应用配置，log 为日志实例，db 为数据库连接，h 为聚合了所有业务服务的 Handler 实例。
-func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler.Handler) *gin.Engine {
+func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler.Handler, options ...RouterOptions) *gin.Engine {
+	opts := RouterOptions{}
+	if len(options) > 0 {
+		opts = options[0]
+	}
 	if cfg.App.Environment == "prod" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -43,11 +53,42 @@ func NewRouter(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler
 	r.GET("/ws/db-terminal", gin.WrapH(dbproxy.NewWebTerminal(cfg)))
 	// /health/ready：就绪检查端点，验证数据库连接可用性（无需认证）
 	r.GET("/health/ready", func(c *gin.Context) {
-		if err := db.Ping(); err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "error": err.Error()})
-			return
+		components := map[string]health.Component{
+			"api":        health.Ready(),
+			"database":   health.Ready(),
+			"web_rdp":    health.Disabled(),
+			"native_rdp": health.Disabled(),
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "ready"})
+		if err := db.Ping(); err != nil {
+			components["database"] = health.NotReady(err)
+		}
+		if opts.ExpectRDPProxy {
+			ctx, cancel := health.WithTimeout(c.Request.Context(), cfg.Proxy.RDP.ConnectTimeout())
+			defer cancel()
+			rdpStatus := health.ProbeRDPProxyReadiness(ctx, cfg)
+			if component, ok := rdpStatus.Components["web_rdp"]; ok {
+				components["web_rdp"] = component
+			} else if rdpStatus.Status != health.StatusReady {
+				components["web_rdp"] = health.Component{Status: health.StatusNotReady, Error: rdpStatus.Status}
+			} else {
+				components["web_rdp"] = health.Ready()
+			}
+			if cfg.Proxy.RDP.NativeEnabled {
+				if component, ok := rdpStatus.Components["native_rdp"]; ok {
+					components["native_rdp"] = component
+				} else if rdpStatus.Status != health.StatusReady {
+					components["native_rdp"] = health.Component{Status: health.StatusNotReady, Error: rdpStatus.Status}
+				} else {
+					components["native_rdp"] = health.NotReady(fmt.Errorf("native rdp health component missing"))
+				}
+			}
+		}
+		ready := health.NewReadiness(components)
+		status := http.StatusOK
+		if ready.Status != health.StatusReady {
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, ready)
 	})
 	// /metrics：Prometheus 指标采集端点，由 promhttp 暴露（无需认证）
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))

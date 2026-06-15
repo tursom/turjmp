@@ -119,6 +119,7 @@ type NativeEngineHandle struct {
 	cmd      *exec.Cmd
 	events   chan NativeEngineEvent
 	done     chan error
+	exited   chan struct{}
 	stopOnce sync.Once
 }
 
@@ -145,6 +146,19 @@ func (h *NativeEngineHandle) Stop() error {
 		}
 	})
 	return err
+}
+
+// Running reports whether the wrapped engine process is currently present.
+func (h *NativeEngineHandle) Running() bool {
+	if h == nil || h.cmd == nil || h.cmd.Process == nil || h.exited == nil {
+		return false
+	}
+	select {
+	case <-h.exited:
+		return false
+	default:
+		return true
+	}
 }
 
 // FreeRDPEngine wraps the freerdp-proxy CLI.
@@ -290,6 +304,7 @@ func (e *FreeRDPEngine) Start(ctx context.Context, cfg NativeEngineConfig) (*Nat
 		cmd:    execCommandFromNative(cmd),
 		events: events,
 		done:   done,
+		exited: make(chan struct{}),
 	}
 	events <- NativeEngineEvent{Type: NativeEngineEventStarted, Time: time.Now()}
 	var scanWG sync.WaitGroup
@@ -304,6 +319,7 @@ func (e *FreeRDPEngine) Start(ctx context.Context, cfg NativeEngineConfig) (*Nat
 	}()
 	go func() {
 		err := cmd.Wait()
+		close(handle.exited)
 		if ctx.Err() != nil {
 			err = &NativeEngineError{Kind: NativeEngineErrorCanceled, Op: "wait", Err: ctx.Err()}
 		} else if err != nil {

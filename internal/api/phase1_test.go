@@ -39,6 +39,19 @@ func TestPhase1RouterHealthAuthAndRBAC(t *testing.T) {
 	if ready.Code != http.StatusOK {
 		t.Fatalf("/health/ready status=%d body=%s", ready.Code, ready.Body.String())
 	}
+	var readyBody struct {
+		Status     string `json:"status"`
+		Components map[string]struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(ready.Body.Bytes(), &readyBody); err != nil {
+		t.Fatalf("decode ready body %s: %v", ready.Body.String(), err)
+	}
+	if readyBody.Status != "ready" || readyBody.Components["database"].Status != "ready" || readyBody.Components["native_rdp"].Status != "disabled" {
+		t.Fatalf("unexpected ready body: %#v", readyBody)
+	}
 
 	unauthorized := phase1Request(t, env.router, http.MethodGet, "/api/v1/users", nil, nil)
 	if unauthorized.Code != http.StatusUnauthorized {
@@ -108,6 +121,41 @@ func TestPhase1RouterHealthAuthAndRBAC(t *testing.T) {
 	}
 	if access.Access["user_rdp_proxy_credential"] {
 		t.Fatalf("operator should not manage user rdp proxy credentials, access=%#v", access.Access)
+	}
+}
+
+func TestReadyProbesRDPProxyComponents(t *testing.T) {
+	env := newPhase1APITestEnv(t)
+	rdpHealth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"not_ready","components":{"web_rdp":{"status":"ready"},"native_rdp":{"status":"not_ready","error":"native rdp engine is not running"}}}`))
+	}))
+	t.Cleanup(rdpHealth.Close)
+	addr := strings.TrimPrefix(rdpHealth.URL, "http://")
+	env.cfg.Proxy.RDP.Addr = addr
+	env.cfg.Proxy.RDP.NativeEnabled = true
+	router := NewRouter(env.cfg, zap.NewNop(), env.db, env.handler, RouterOptions{ExpectRDPProxy: true})
+
+	ready := phase1Request(t, router, http.MethodGet, "/health/ready", nil, nil)
+	if ready.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/health/ready status=%d body=%s", ready.Code, ready.Body.String())
+	}
+	var body struct {
+		Status     string `json:"status"`
+		Components map[string]struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(ready.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode ready body %s: %v", ready.Body.String(), err)
+	}
+	if body.Status != "not_ready" || body.Components["web_rdp"].Status != "ready" || body.Components["native_rdp"].Status != "not_ready" {
+		t.Fatalf("unexpected ready body: %#v", body)
+	}
+	if strings.Contains(ready.Body.String(), "proxy-secret") || strings.Contains(ready.Body.String(), "target-password") {
+		t.Fatalf("readiness leaked secret: %s", ready.Body.String())
 	}
 }
 
@@ -879,6 +927,8 @@ func TestPhase1ProxyNativeRDPSessionLifecycle(t *testing.T) {
 
 type phase1APITestEnv struct {
 	router   http.Handler
+	db       *repository.DB
+	handler  *handler.Handler
 	store    *repository.Store
 	cfg      config.Config
 	enforcer *casbin.Enforcer
@@ -960,7 +1010,7 @@ func newPhase1APITestEnv(t *testing.T) phase1APITestEnv {
 		Store:          store,
 		Enforcer:       enforcer,
 	}
-	return phase1APITestEnv{router: NewRouter(cfg, zap.NewNop(), db, h), store: store, cfg: cfg, enforcer: enforcer}
+	return phase1APITestEnv{router: NewRouter(cfg, zap.NewNop(), db, h), db: db, handler: h, store: store, cfg: cfg, enforcer: enforcer}
 }
 
 func phase1Login(t *testing.T, router http.Handler, username, password string) string {

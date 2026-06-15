@@ -1,7 +1,8 @@
 // config 包负责 Turjmp 系统的配置管理。
 // 使用 koanf 库实现多层配置合并：先加载硬编码默认值，
 // 再用 YAML 配置文件覆盖，最后用环境变量 TURJMP_* 覆盖。
-// 环境变量使用点号分隔嵌套键，如 TURJMP_HTTP_ADDR → http.addr。
+// 环境变量优先使用双下划线分隔嵌套键，如 TURJMP_PROXY__RDP__NATIVE_ENABLED → proxy.rdp.native_enabled。
+// 为兼容早期配置，常见单下划线形式如 TURJMP_HTTP_ADDR 仍映射为 http.addr。
 package config
 
 import (
@@ -326,7 +327,7 @@ type RateLimitConfig struct {
 //  1. defaults() — 硬编码默认值
 //  2. YAML 配置文件 — 通过 path 参数指定的文件路径
 //  3. 环境变量 — 以 TURJMP_ 为前缀，双下划线或下划线转为点号分隔
-//     例如 TURJMP_HTTP_ADDR → http.addr，TURJMP_DATABASE_DSN → database.dsn
+//     例如 TURJMP_HTTP_ADDR → http.addr，TURJMP_PROXY__RDP__NATIVE_ENABLED → proxy.rdp.native_enabled
 //
 // 加载完成后执行必要的校验（数据库驱动、JWT 密钥路径、代理密钥必填）。
 func Load(path string) (Config, error) {
@@ -343,8 +344,7 @@ func Load(path string) (Config, error) {
 	}
 	// 第 3 层：加载 TURJMP_* 环境变量，自动转换分隔符
 	if err := k.Load(env.Provider("TURJMP_", ".", func(s string) string {
-		key := strings.TrimPrefix(s, "TURJMP_")
-		return strings.ToLower(strings.ReplaceAll(key, "_", "."))
+		return envConfigKey(s)
 	}), nil); err != nil {
 		return Config{}, err
 	}
@@ -368,6 +368,65 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("proxy_auth.secret is required")
 	}
 	return cfg, nil
+}
+
+func envConfigKey(s string) string {
+	key := strings.ToLower(strings.TrimPrefix(s, "TURJMP_"))
+	if strings.Contains(key, "__") {
+		return strings.ReplaceAll(key, "__", ".")
+	}
+	if mapped, ok := legacyEnvKeys[key]; ok {
+		return mapped
+	}
+	return strings.ReplaceAll(key, "_", ".")
+}
+
+var legacyEnvKeys = map[string]string{
+	"app_name":                          "app.name",
+	"app_environment":                   "app.environment",
+	"http_addr":                         "http.addr",
+	"http_shutdown_timeout_seconds":     "http.shutdown_timeout_seconds",
+	"database_driver":                   "database.driver",
+	"database_dsn":                      "database.dsn",
+	"database_migrations_dir":           "database.migrations_dir",
+	"security_encryption_key":           "security.encryption_key",
+	"security_password_min_length":      "security.password_min_length",
+	"jwt_private_key_path":              "jwt.private_key_path",
+	"jwt_public_key_path":               "jwt.public_key_path",
+	"jwt_access_ttl_seconds":            "jwt.access_ttl_seconds",
+	"jwt_refresh_ttl_seconds":           "jwt.refresh_ttl_seconds",
+	"proxy_auth_secret":                 "proxy_auth.secret",
+	"proxy_auth_allowed_ips":            "proxy_auth.allowed_ips",
+	"proxy_api_base_url":                "proxy.api_base_url",
+	"proxy_ssh_addr":                    "proxy.ssh.addr",
+	"proxy_ssh_max_connections":         "proxy.ssh.max_connections",
+	"proxy_ssh_idle_timeout_seconds":    "proxy.ssh.idle_timeout_seconds",
+	"proxy_ssh_connect_timeout_seconds": "proxy.ssh.connect_timeout_seconds",
+	"proxy_db_mysql_addr":               "proxy.db.mysql_addr",
+	"proxy_db_postgres_addr":            "proxy.db.postgres_addr",
+	"proxy_db_max_connections":          "proxy.db.max_connections",
+	"proxy_db_idle_timeout_seconds":     "proxy.db.idle_timeout_seconds",
+	"proxy_db_connect_timeout_seconds":  "proxy.db.connect_timeout_seconds",
+	"proxy_db_usql_path":                "proxy.db.usql_path",
+	"proxy_rdp_addr":                    "proxy.rdp.addr",
+	"proxy_rdp_guacd_addr":              "proxy.rdp.guacd_addr",
+	"proxy_rdp_recording_path":          "proxy.rdp.recording_path",
+	"proxy_rdp_max_connections":         "proxy.rdp.max_connections",
+	"proxy_rdp_idle_timeout_seconds":    "proxy.rdp.idle_timeout_seconds",
+	"proxy_rdp_connect_timeout_seconds": "proxy.rdp.connect_timeout_seconds",
+	"proxy_rdp_native_enabled":          "proxy.rdp.native_enabled",
+	"proxy_rdp_native_addr":             "proxy.rdp.native_addr",
+	"proxy_rdp_native_public_host":      "proxy.rdp.native_public_host",
+	"proxy_rdp_native_public_port":      "proxy.rdp.native_public_port",
+	"proxy_rdp_native_cert_path":        "proxy.rdp.native_cert_path",
+	"proxy_rdp_native_key_path":         "proxy.rdp.native_key_path",
+	"proxy_rdp_native_engine_path":      "proxy.rdp.native_engine_path",
+	"proxy_rdp_native_work_dir":         "proxy.rdp.native_work_dir",
+	"totp_issuer":                       "totp.issuer",
+	"logging_level":                     "logging.level",
+	"logging_encoding":                  "logging.encoding",
+	"rate_limit_enabled":                "rate_limit.enabled",
+	"rate_limit_requests_per_second":    "rate_limit.requests_per_second",
 }
 
 // defaults 返回应用配置的硬编码默认值映射。

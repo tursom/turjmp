@@ -26,8 +26,8 @@ type Server struct {
 // cfg 提供监听地址等配置，log 用于日志输出，
 // db 和 h 传递给路由层用于依赖注入。
 // ReadHeaderTimeout 设为 10 秒，防止慢速客户端攻击。
-func New(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler.Handler) *Server {
-	router := api.NewRouter(cfg, log, db, h)
+func New(cfg config.Config, log *zap.Logger, db *repository.DB, h *handler.Handler, options ...api.RouterOptions) *Server {
+	router := api.NewRouter(cfg, log, db, h, options...)
 	srv := &http.Server{
 		Addr:              cfg.HTTP.Addr,
 		Handler:           router,

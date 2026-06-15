@@ -2,9 +2,11 @@ package rdpproxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -278,6 +280,51 @@ func TestServerStartLaunchesNativeEngineDynamicConfig(t *testing.T) {
 	for _, forbidden := range []string{"target-password", "Password=", "User=administrator"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("native config leaked %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestHealthReportsNativeDisabled(t *testing.T) {
+	cfg := testConfig(t)
+	resp := httptest.NewRecorder()
+	NewServerWithDeps(cfg, &fakeAPI{}, &memoryStorage{}).health(resp, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var body struct {
+		Status     string `json:"status"`
+		Components map[string]struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body %s: %v", resp.Body.String(), err)
+	}
+	if body.Status != "ready" || body.Components["web_rdp"].Status != "ready" || body.Components["native_rdp"].Status != "disabled" {
+		t.Fatalf("unexpected body: %#v", body)
+	}
+}
+
+func TestHealthReportsNativeConfigFailureWithoutSecrets(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Proxy.RDP.NativeEnabled = true
+	cfg.Proxy.RDP.NativeEnginePath = filepath.Join(t.TempDir(), "missing-freerdp-proxy")
+	cfg.Proxy.RDP.NativeCertPath = "/tmp/cert-with-proxy-secret"
+	cfg.Proxy.RDP.NativeKeyPath = "/tmp/key-with-target-password"
+	cfg.ProxyAuth.Secret = "proxy-secret"
+	resp := httptest.NewRecorder()
+	NewServerWithDeps(cfg, &fakeAPI{}, &memoryStorage{}).health(resp, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("health status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	if !strings.Contains(body, `"status":"not_ready"`) {
+		t.Fatalf("expected not_ready body: %s", body)
+	}
+	for _, forbidden := range []string{"proxy-secret", "target-password"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("health leaked %q: %s", forbidden, body)
 		}
 	}
 }

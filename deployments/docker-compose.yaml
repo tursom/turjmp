@@ -4,17 +4,28 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        FREERDP_VERSION: "${FREERDP_VERSION:-3.10.3}"
     entrypoint:
       - /bin/sh
       - -ec
       - |
         turjmp --config /etc/turjmp/config.yaml --migrate up
         exec turjmp --config /etc/turjmp/config.yaml --all
+    environment:
+      TURJMP_PROXY__RDP__NATIVE_ENABLED: "${TURJMP_RDP_NATIVE_ENABLED:-false}"
+      TURJMP_PROXY__RDP__NATIVE_PUBLIC_HOST: "${TURJMP_RDP_NATIVE_PUBLIC_HOST:-}"
+      TURJMP_PROXY__RDP__NATIVE_PUBLIC_PORT: "${TURJMP_RDP_NATIVE_PUBLIC_PORT:-33890}"
+      TURJMP_PROXY__RDP__NATIVE_CERT_PATH: "${TURJMP_RDP_NATIVE_CERT_PATH:-/keys/rdp-native.crt}"
+      TURJMP_PROXY__RDP__NATIVE_KEY_PATH: "${TURJMP_RDP_NATIVE_KEY_PATH:-/keys/rdp-native.key}"
+      TURJMP_PROXY__RDP__NATIVE_ENGINE_PATH: "/opt/freerdp/bin/freerdp-proxy"
+      TURJMP_PROXY__RDP__NATIVE_WORK_DIR: "/var/lib/turjmp/rdp-native"
     volumes:
       - ../configs/config.docker.yaml:/etc/turjmp/config.yaml:ro
       - ./data:/data
       - ./keys:/keys
       - ./recordings:/recordings
+      - ./rdp-native:/var/lib/turjmp/rdp-native
     ports:
       - "${TURJMP_HTTP_PORT:-8085}:8080"
       - "${TURJMP_SSH_PORT:-2222}:2222"
@@ -24,6 +35,12 @@ services:
     depends_on:
       guacd:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
 
   guacd:
     image: guacamole/guacd:1.5.5

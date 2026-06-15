@@ -1,3 +1,4 @@
+#define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
 #include <ctype.h>
@@ -10,7 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -1039,12 +1042,14 @@ static BOOL turjmp_server_post_connect(proxyPlugin* plugin, proxyData* pdata, vo
 {
 	(void)custom;
 	turjmpSessionState* state = session_state_get(plugin, pdata);
-	if (!pdata || !pdata->pc || !pdata->pc->settings || !state)
+	if (!pdata || !pdata->pc || !pdata->pc->context.settings || !state)
 		return FALSE;
 	const BOOL user_ok =
-	    freerdp_settings_set_string(pdata->pc->settings, FreeRDP_Username, state->target_username);
+	    freerdp_settings_set_string(pdata->pc->context.settings, FreeRDP_Username,
+	                                state->target_username);
 	const BOOL pass_ok =
-	    freerdp_settings_set_string(pdata->pc->settings, FreeRDP_Password, state->target_password);
+	    freerdp_settings_set_string(pdata->pc->context.settings, FreeRDP_Password,
+	                                state->target_password);
 	touch_activity(plugin, pdata);
 	return user_ok && pass_ok;
 }

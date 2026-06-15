@@ -15,6 +15,7 @@ import (
 	"github.com/pressly/goose/v3"
 	"go.uber.org/zap"
 
+	"github.com/tursom/turjmp/internal/api"
 	"github.com/tursom/turjmp/internal/api/handler"
 	"github.com/tursom/turjmp/internal/auth"
 	"github.com/tursom/turjmp/internal/config"
@@ -114,7 +115,7 @@ func main() {
 	var rdpServer *rdpproxy.Server
 
 	if selected.api {
-		apiServer, apiDB, err = startAPI(cfg, log)
+		apiServer, apiDB, err = startAPI(cfg, log, api.RouterOptions{ExpectRDPProxy: selected.rdpProxy})
 		must(err)
 		defer apiDB.Close()
 		go func() {
@@ -214,7 +215,7 @@ func (r roles) any() bool {
 //  9. HTTP 服务器（server.New）          —— 组装中间件、路由并返回可启动的服务器
 //
 // 任一步骤初始化失败都会关闭已打开的数据库连接并向上返回错误
-func startAPI(cfg config.Config, log *zap.Logger) (*server.Server, *repository.DB, error) {
+func startAPI(cfg config.Config, log *zap.Logger, routerOptions api.RouterOptions) (*server.Server, *repository.DB, error) {
 	db, err := repository.NewDB(cfg.Database)
 	if err != nil {
 		return nil, nil, err
@@ -267,7 +268,7 @@ func startAPI(cfg config.Config, log *zap.Logger) (*server.Server, *repository.D
 		Store:    store,
 		Enforcer: enforcer,
 	}
-	return server.New(cfg, log, db, h), db, nil
+	return server.New(cfg, log, db, h, routerOptions), db, nil
 }
 
 // runMigration 执行数据库迁移操作
