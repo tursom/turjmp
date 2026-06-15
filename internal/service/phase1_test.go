@@ -334,6 +334,179 @@ func TestPhase1RDPRouteUsernameParsing(t *testing.T) {
 	}
 }
 
+func TestNativeRDPResolverResolvesManagedPassword(t *testing.T) {
+	store, closeFn := newMigratedTestStore(t)
+	defer closeFn()
+	box := phase1SecretBox(t)
+	userSvc := NewUserService(store, 8)
+	user, err := userSvc.Create(CreateUserInput{
+		Username: "rdpclient",
+		Name:     "RDP Client",
+		Password: "loginpass",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewRDPProxyCredentialService(store, 8).Set(user.ID, "front-rdp-pass"); err != nil {
+		t.Fatal(err)
+	}
+	asset, account := createPhase1RDPAssetAccount(t, store, box)
+	permission := domain.AssetPermission{Name: "native rdp connect", Actions: "connect", IsActive: true}
+	if err := store.CreatePermission(&permission, repository.PermissionLinks{
+		UserIDs:    []int64{user.ID},
+		AssetIDs:   []int64{asset.ID},
+		AccountIDs: []int64{account.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := NewNativeRDPResolverService(store, box, 8)
+	resolved, err := resolver.Resolve(NativeRDPResolveInput{
+		RouteUsername: fmt.Sprintf("%s#%d#%d", user.Username, asset.ID, account.ID),
+		Password:      "front-rdp-pass",
+		RemoteAddr:    "203.0.113.10:50000",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.UserID != user.ID || resolved.AssetID != asset.ID || resolved.AccountID != account.ID {
+		t.Fatalf("unexpected identity: %#v", resolved)
+	}
+	if resolved.Target.Address != asset.Address || resolved.Target.Port != 3389 || resolved.Target.Protocol != "rdp" {
+		t.Fatalf("unexpected target: %#v", resolved.Target)
+	}
+	if resolved.Account.Username != account.Username || resolved.Account.Secret != "target-rdp-password" || resolved.Account.SecretType != "password" {
+		t.Fatalf("unexpected account: %#v", resolved.Account)
+	}
+}
+
+func TestNativeRDPResolverDenials(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(t *testing.T, store *repository.Store, user domain.User, asset domain.Asset, account domain.Account)
+		input    func(user domain.User, asset domain.Asset, account domain.Account) NativeRDPResolveInput
+		wantErr  error
+		wantText string
+	}{
+		{
+			name: "bad password",
+			input: func(user domain.User, asset domain.Asset, account domain.Account) NativeRDPResolveInput {
+				return nativeRDPResolveTestInput(user, asset, account, "wrong-front-pass")
+			},
+			wantErr:  domain.ErrUnauthorized,
+			wantText: domain.ErrUnauthorized.Error(),
+		},
+		{
+			name: "malformed route",
+			input: func(user domain.User, asset domain.Asset, account domain.Account) NativeRDPResolveInput {
+				return NativeRDPResolveInput{RouteUsername: "bad-route", Password: "front-rdp-pass"}
+			},
+			wantErr:  domain.ErrUnauthorized,
+			wantText: domain.ErrUnauthorized.Error(),
+		},
+		{
+			name: "missing permission",
+			mutate: func(t *testing.T, store *repository.Store, user domain.User, asset domain.Asset, account domain.Account) {
+				if _, err := store.DB().Exec(`DELETE FROM perm_accounts`); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.DB().Exec(`DELETE FROM perm_assets`); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.DB().Exec(`DELETE FROM perm_users`); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.DB().Exec(`DELETE FROM asset_permissions`); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr:  domain.ErrForbidden,
+			wantText: domain.ErrForbidden.Error(),
+		},
+		{
+			name: "inactive asset",
+			mutate: func(t *testing.T, store *repository.Store, user domain.User, asset domain.Asset, account domain.Account) {
+				if _, err := store.DB().Exec(`UPDATE assets SET is_active = ? WHERE id = ?`, false, asset.ID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr:  domain.ErrForbidden,
+			wantText: domain.ErrForbidden.Error(),
+		},
+		{
+			name: "inactive account",
+			mutate: func(t *testing.T, store *repository.Store, user domain.User, asset domain.Asset, account domain.Account) {
+				if _, err := store.DB().Exec(`UPDATE accounts SET is_active = ? WHERE id = ?`, false, account.ID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr:  domain.ErrForbidden,
+			wantText: domain.ErrForbidden.Error(),
+		},
+		{
+			name: "wrong protocol",
+			mutate: func(t *testing.T, store *repository.Store, user domain.User, asset domain.Asset, account domain.Account) {
+				if _, err := store.DB().Exec(`UPDATE assets SET platform_id = ? WHERE id = ?`, linuxPlatformID(t, store), asset.ID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr:  domain.ErrForbidden,
+			wantText: domain.ErrForbidden.Error(),
+		},
+		{
+			name: "non password account",
+			mutate: func(t *testing.T, store *repository.Store, user domain.User, asset domain.Asset, account domain.Account) {
+				if _, err := store.DB().Exec(`UPDATE accounts SET secret_type = 'ssh_key' WHERE id = ?`, account.ID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr:  domain.ErrForbidden,
+			wantText: domain.ErrForbidden.Error(),
+		},
+		{
+			name: "inactive user",
+			mutate: func(t *testing.T, store *repository.Store, user domain.User, asset domain.Asset, account domain.Account) {
+				if _, err := store.DB().Exec(`UPDATE users SET is_active = ? WHERE id = ?`, false, user.ID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr:  domain.ErrUnauthorized,
+			wantText: domain.ErrUnauthorized.Error(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, closeFn := newMigratedTestStore(t)
+			defer closeFn()
+			box := phase1SecretBox(t)
+			user, asset, account := createNativeRDPResolveFixture(t, store, box)
+			if tt.mutate != nil {
+				tt.mutate(t, store, user, asset, account)
+			}
+			input := nativeRDPResolveTestInput(user, asset, account, "front-rdp-pass")
+			if tt.input != nil {
+				input = tt.input(user, asset, account)
+			}
+			_, err := NewNativeRDPResolverService(store, box, 8).Resolve(input)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Resolve err=%v, want %v", err, tt.wantErr)
+			}
+			if err != nil && err.Error() != tt.wantText {
+				t.Fatalf("public error text=%q want %q", err.Error(), tt.wantText)
+			}
+			var resolveErr *NativeRDPResolveError
+			if !errors.As(err, &resolveErr) || resolveErr.Reason == "" {
+				t.Fatalf("err=%T %v, want NativeRDPResolveError with reason", err, err)
+			}
+			for _, secret := range []string{"front-rdp-pass", "wrong-front-pass", "target-rdp-password"} {
+				if strings.Contains(err.Error(), secret) || strings.Contains(resolveErr.Reason, secret) {
+					t.Fatalf("resolve error leaked secret %q: err=%q reason=%q", secret, err.Error(), resolveErr.Reason)
+				}
+			}
+		})
+	}
+}
+
 func TestPhase1SettingsMaskAndEncryptSecretValues(t *testing.T) {
 	store, closeFn := newMigratedTestStore(t)
 	defer closeFn()
@@ -660,6 +833,68 @@ func createPhase1AssetAccount(t *testing.T, store *repository.Store, box *crypto
 	return asset, account
 }
 
+func createNativeRDPResolveFixture(t *testing.T, store *repository.Store, box *crypto.SecretBox) (domain.User, domain.Asset, domain.Account) {
+	t.Helper()
+	user, err := NewUserService(store, 8).Create(CreateUserInput{
+		Username: "rdpclient",
+		Name:     "RDP Client",
+		Password: "loginpass",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewRDPProxyCredentialService(store, 8).Set(user.ID, "front-rdp-pass"); err != nil {
+		t.Fatal(err)
+	}
+	asset, account := createPhase1RDPAssetAccount(t, store, box)
+	permission := domain.AssetPermission{Name: "native rdp connect", Actions: "connect", IsActive: true}
+	if err := store.CreatePermission(&permission, repository.PermissionLinks{
+		UserIDs:    []int64{user.ID},
+		AssetIDs:   []int64{asset.ID},
+		AccountIDs: []int64{account.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return user, asset, account
+}
+
+func createPhase1RDPAssetAccount(t *testing.T, store *repository.Store, box *crypto.SecretBox) (domain.Asset, domain.Account) {
+	t.Helper()
+	secret, err := box.EncryptString("target-rdp-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := domain.Asset{
+		Name:       "phase1-windows",
+		Address:    "win.internal",
+		PlatformID: windowsPlatformID(t, store),
+		IsActive:   true,
+	}
+	if err := store.CreateAsset(&asset); err != nil {
+		t.Fatal(err)
+	}
+	account := domain.Account{
+		AssetID:    asset.ID,
+		Name:       "administrator",
+		Username:   "administrator",
+		Secret:     secret,
+		SecretType: "password",
+		IsActive:   true,
+	}
+	if err := store.CreateAccount(&account); err != nil {
+		t.Fatal(err)
+	}
+	return asset, account
+}
+
+func nativeRDPResolveTestInput(user domain.User, asset domain.Asset, account domain.Account, password string) NativeRDPResolveInput {
+	return NativeRDPResolveInput{
+		RouteUsername: fmt.Sprintf("%s#%d#%d", user.Username, asset.ID, account.ID),
+		Password:      password,
+		RemoteAddr:    "203.0.113.10:50000",
+	}
+}
+
 func linuxPlatformID(t *testing.T, store *repository.Store) int64 {
 	t.Helper()
 	platforms, err := store.ListPlatforms()
@@ -672,6 +907,21 @@ func linuxPlatformID(t *testing.T, store *repository.Store) int64 {
 		}
 	}
 	t.Fatal("missing Linux platform")
+	return 0
+}
+
+func windowsPlatformID(t *testing.T, store *repository.Store) int64 {
+	t.Helper()
+	platforms, err := store.ListPlatforms()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, platform := range platforms {
+		if platform.Name == "Windows" {
+			return platform.ID
+		}
+	}
+	t.Fatal("missing Windows platform")
 	return 0
 }
 

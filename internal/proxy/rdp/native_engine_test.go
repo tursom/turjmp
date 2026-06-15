@@ -250,6 +250,39 @@ func TestNativeEngineConfigFromAppConfig(t *testing.T) {
 	}
 }
 
+func TestNativeEngineConfigFromResolvedAuth(t *testing.T) {
+	cfg := config.Config{
+		Proxy: config.ProxyConfig{
+			RDP: config.RDPProxyConfig{
+				NativeAddr:       "127.0.0.1:33900",
+				NativeEnginePath: "/usr/bin/freerdp-proxy",
+				NativeWorkDir:    "/tmp/turjmp-rdp-native",
+				NativeCertPath:   "/cert.pem",
+				NativeKeyPath:    "/key.pem",
+			},
+		},
+	}
+	engineCfg, err := NativeEngineConfigFromResolvedAuth(cfg, authResult{
+		Target:  targetConfig{Address: "win.internal", Port: 3391, Protocol: "rdp"},
+		Account: targetAccount{Username: "administrator", Secret: "target-password", SecretType: "password"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if engineCfg.ListenHost != "127.0.0.1" || engineCfg.ListenPort != 33900 {
+		t.Fatalf("listen=%s:%d", engineCfg.ListenHost, engineCfg.ListenPort)
+	}
+	if engineCfg.Target.Host != "win.internal" || engineCfg.Target.Port != 3391 || engineCfg.Target.Username != "administrator" || engineCfg.Target.Password != "target-password" {
+		t.Fatalf("unexpected target: %#v", engineCfg.Target)
+	}
+	if _, err := NativeEngineConfigFromResolvedAuth(cfg, authResult{
+		Target:  targetConfig{Address: "win.internal", Protocol: "ssh"},
+		Account: targetAccount{Username: "administrator", Secret: "target-password"},
+	}); err == nil {
+		t.Fatal("expected non-rdp auth to be rejected")
+	}
+}
+
 func nativeEngineTestConfig(t *testing.T) NativeEngineConfig {
 	t.Helper()
 	return NativeEngineConfig{

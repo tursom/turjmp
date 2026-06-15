@@ -30,6 +30,13 @@ func (f *fakeAPI) VerifyConnectionToken(_ context.Context, token, remoteAddr str
 	return f.auth, nil
 }
 
+func (f *fakeAPI) ResolveNativeRDP(_ context.Context, routeUsername, password, remoteAddr string) (authResult, error) {
+	if f.verifyErr != nil {
+		return authResult{}, f.verifyErr
+	}
+	return f.auth, nil
+}
+
 func (f *fakeAPI) CreateSession(_ context.Context, session sessionInfo) (sessionInfo, error) {
 	if f.createErr != nil {
 		return sessionInfo{}, f.createErr

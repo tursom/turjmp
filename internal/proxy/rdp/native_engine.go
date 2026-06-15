@@ -198,6 +198,19 @@ func NativeEngineConfigFromAppConfig(cfg config.Config, target NativeFixedTarget
 	}, nil
 }
 
+// NativeEngineConfigFromResolvedAuth converts a Turjmp-native RDP resolution into engine config.
+func NativeEngineConfigFromResolvedAuth(cfg config.Config, auth authResult) (NativeEngineConfig, error) {
+	if err := validateRDPAuth(auth); err != nil {
+		return NativeEngineConfig{}, err
+	}
+	return NativeEngineConfigFromAppConfig(cfg, NativeFixedTarget{
+		Host:     auth.Target.Address,
+		Port:     rdpTargetPort(auth.Target),
+		Username: auth.Account.Username,
+		Password: auth.Account.Secret,
+	})
+}
+
 // ValidateNativeEngineConfig performs fail-fast checks only when native RDP is enabled.
 func ValidateNativeEngineConfig(cfg config.Config) error {
 	if !cfg.Proxy.RDP.NativeEnabled {

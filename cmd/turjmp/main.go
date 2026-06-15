@@ -256,6 +256,7 @@ func startAPI(cfg config.Config, log *zap.Logger) (*server.Server, *repository.D
 		Auth:           service.NewAuthService(store, jwtMgr, cfg),
 		Users:          service.NewUserService(store, cfg.Security.PasswordMinLength),
 		RDPCredentials: service.NewRDPProxyCredentialService(store, cfg.Security.PasswordMinLength),
+		NativeRDP:      service.NewNativeRDPResolverService(store, box, cfg.Security.PasswordMinLength),
 		Assets:         service.NewAssetService(store, box),
 		Permissions:    service.NewPermissionService(store),
 		Tokens:         service.NewTokenService(store, box, cfg.ProxyAuth),

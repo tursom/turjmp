@@ -705,6 +705,52 @@ func TestPhase1ProxyEndpointsRequireProxyAuth(t *testing.T) {
 	}
 }
 
+func TestPhase1ProxyNativeRDPResolve(t *testing.T) {
+	env := newPhase1APITestEnv(t)
+	box := phase1APISecretBox(t, env.cfg)
+	user, asset, account := createPhase1APIRDPResolveFixture(t, env.store, box)
+	body := gin.H{
+		"route_username": fmt.Sprintf("%s#%d#%d", user.Username, asset.ID, account.ID),
+		"password":       "front-rdp-pass",
+		"remote_addr":    "203.0.113.10:50000",
+	}
+
+	unauthorized := phase1Request(t, env.router, http.MethodPost, "/api/v1/proxy/rdp-native/resolve", body, nil)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("native rdp resolve without auth status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+	resolvedResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/proxy/rdp-native/resolve", body, phase1ProxyHeader(env.cfg.ProxyAuth.Secret))
+	if resolvedResp.Code != http.StatusOK {
+		t.Fatalf("native rdp resolve status=%d body=%s", resolvedResp.Code, resolvedResp.Body.String())
+	}
+	resolved := phase1DecodeData[service.NativeRDPResolveResult](t, resolvedResp)
+	if resolved.UserID != user.ID || resolved.AssetID != asset.ID || resolved.AccountID != account.ID {
+		t.Fatalf("unexpected resolved identity: %#v", resolved)
+	}
+	if resolved.Target.Address != asset.Address || resolved.Target.Port != 3389 || resolved.Target.Protocol != "rdp" {
+		t.Fatalf("unexpected resolved target: %#v", resolved.Target)
+	}
+	if resolved.Account.Username != account.Username || resolved.Account.Secret != "target-rdp-password" || resolved.Account.SecretType != "password" {
+		t.Fatalf("unexpected resolved account: %#v", resolved.Account)
+	}
+	for _, forbidden := range []string{"password_hash", "front-rdp-pass"} {
+		if strings.Contains(resolvedResp.Body.String(), forbidden) {
+			t.Fatalf("native resolve response leaked %q: %s", forbidden, resolvedResp.Body.String())
+		}
+	}
+
+	badPassword := phase1Request(t, env.router, http.MethodPost, "/api/v1/proxy/rdp-native/resolve", gin.H{
+		"route_username": body["route_username"],
+		"password":       "wrong-front-pass",
+	}, phase1ProxyHeader(env.cfg.ProxyAuth.Secret))
+	if badPassword.Code != http.StatusUnauthorized {
+		t.Fatalf("bad native rdp password status=%d body=%s", badPassword.Code, badPassword.Body.String())
+	}
+	if strings.Contains(badPassword.Body.String(), "wrong-front-pass") || strings.Contains(badPassword.Body.String(), "front_auth_failed") {
+		t.Fatalf("bad password response leaked detail: %s", badPassword.Body.String())
+	}
+}
+
 type phase1APITestEnv struct {
 	router   http.Handler
 	store    *repository.Store
@@ -774,6 +820,7 @@ func newPhase1APITestEnv(t *testing.T) phase1APITestEnv {
 		Auth:           service.NewAuthService(store, jwtMgr, cfg),
 		Users:          service.NewUserService(store, cfg.Security.PasswordMinLength),
 		RDPCredentials: service.NewRDPProxyCredentialService(store, cfg.Security.PasswordMinLength),
+		NativeRDP:      service.NewNativeRDPResolverService(store, box, cfg.Security.PasswordMinLength),
 		Assets:         service.NewAssetService(store, box),
 		Permissions:    service.NewPermissionService(store),
 		Tokens:         service.NewTokenService(store, box, cfg.ProxyAuth),
@@ -845,6 +892,63 @@ func phase1AssertNoCredentialSecretLeak(t *testing.T, body string) {
 	}
 }
 
+func createPhase1APIRDPResolveFixture(t *testing.T, store *repository.Store, box *crypto.SecretBox) (domain.User, domain.Asset, domain.Account) {
+	t.Helper()
+	user, err := service.NewUserService(store, 8).Create(service.CreateUserInput{
+		Username: "rdpclient",
+		Name:     "RDP Client",
+		Password: "loginpass",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.NewRDPProxyCredentialService(store, 8).Set(user.ID, "front-rdp-pass"); err != nil {
+		t.Fatal(err)
+	}
+	secret, err := box.EncryptString("target-rdp-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := domain.Asset{
+		Name:       "phase1-windows",
+		Address:    "win.internal",
+		PlatformID: phase1WindowsPlatformID(t, store),
+		IsActive:   true,
+	}
+	if err := store.CreateAsset(&asset); err != nil {
+		t.Fatal(err)
+	}
+	account := domain.Account{
+		AssetID:    asset.ID,
+		Name:       "administrator",
+		Username:   "administrator",
+		Secret:     secret,
+		SecretType: "password",
+		IsActive:   true,
+	}
+	if err := store.CreateAccount(&account); err != nil {
+		t.Fatal(err)
+	}
+	permission := domain.AssetPermission{Name: "native rdp connect", Actions: "connect", IsActive: true}
+	if err := store.CreatePermission(&permission, repository.PermissionLinks{
+		UserIDs:    []int64{user.ID},
+		AssetIDs:   []int64{asset.ID},
+		AccountIDs: []int64{account.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return user, asset, account
+}
+
+func phase1APISecretBox(t *testing.T, cfg config.Config) *crypto.SecretBox {
+	t.Helper()
+	box, err := crypto.NewSecretBox(cfg.Security.EncryptionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return box
+}
+
 func phase1AuthHeader(token string) map[string]string {
 	return map[string]string{"Authorization": "Bearer " + token}
 }
@@ -865,6 +969,21 @@ func phase1LinuxPlatformID(t *testing.T, store *repository.Store) int64 {
 		}
 	}
 	t.Fatal("missing Linux platform")
+	return 0
+}
+
+func phase1WindowsPlatformID(t *testing.T, store *repository.Store) int64 {
+	t.Helper()
+	platforms, err := store.ListPlatforms()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, platform := range platforms {
+		if platform.Name == "Windows" {
+			return platform.ID
+		}
+	}
+	t.Fatal("missing Windows platform")
 	return 0
 }
 

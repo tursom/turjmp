@@ -71,6 +71,42 @@ func (c *APIClient) VerifyConnectionToken(ctx context.Context, token, remoteAddr
 	}, nil
 }
 
+// ResolveNativeRDP validates mstsc front-side credentials and resolves the managed target account.
+func (c *APIClient) ResolveNativeRDP(ctx context.Context, routeUsername, password, remoteAddr string) (authResult, error) {
+	var out struct {
+		UserID    int64        `json:"user_id"`
+		AssetID   int64        `json:"asset_id"`
+		AccountID int64        `json:"account_id"`
+		Target    targetConfig `json:"target"`
+		Account   struct {
+			Username   string `json:"username"`
+			Secret     string `json:"secret"`
+			SecretType string `json:"secret_type"`
+		} `json:"account"`
+	}
+	if err := c.post(ctx, "/api/v1/proxy/rdp-native/resolve", map[string]any{
+		"route_username": routeUsername,
+		"password":       password,
+		"remote_addr":    remoteAddr,
+	}, &out); err != nil {
+		return authResult{}, err
+	}
+	if out.Target.Port == 0 && isRDPProtocol(out.Target.Protocol) {
+		out.Target.Port = 3389
+	}
+	return authResult{
+		Target: out.Target,
+		Account: targetAccount{
+			Username:   out.Account.Username,
+			Secret:     out.Account.Secret,
+			SecretType: out.Account.SecretType,
+		},
+		UserID:    out.UserID,
+		AssetID:   out.AssetID,
+		AccountID: out.AccountID,
+	}, nil
+}
+
 // CreateSession creates an audited RDP session record.
 func (c *APIClient) CreateSession(ctx context.Context, session sessionInfo) (sessionInfo, error) {
 	var out struct {

@@ -41,6 +41,8 @@ type Handler struct {
 	Users *service.UserService
 	// RDPCredentials 原生 RDP MITM 代理前端认证独立密码服务
 	RDPCredentials *service.RDPProxyCredentialService
+	// NativeRDP 原生 RDP MITM 代理的前端认证、授权和目标解析服务
+	NativeRDP *service.NativeRDPResolverService
 	// Assets 资产管理服务：处理资产、资产组和账户的 CRUD 操作及树形结构查询
 	Assets *service.AssetService
 	// Permissions 权限管理服务：处理权限规则的 CRUD 操作
@@ -997,6 +999,24 @@ func (h *Handler) ProxyHostKeys(c *gin.Context) {
 		})
 	}
 	httpx.JSON(c, 200, out)
+}
+
+// ProxyResolveNativeRDP validates mstsc front-side credentials and resolves the managed RDP target.
+func (h *Handler) ProxyResolveNativeRDP(c *gin.Context) {
+	if !h.proxyAuthorized(c) {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return
+	}
+	var req service.NativeRDPResolveInput
+	if !middleware.RequireJSON(c, &req) {
+		return
+	}
+	result, err := h.NativeRDP.Resolve(req)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, http.StatusOK, result)
 }
 
 // ProxyCreateSession 供代理组件创建 SSH 会话记录

@@ -48,6 +48,7 @@ type sessionInfo struct {
 // apiClient is the subset of backend API calls needed by the RDP proxy.
 type apiClient interface {
 	VerifyConnectionToken(ctx context.Context, token, remoteAddr string) (authResult, error)
+	ResolveNativeRDP(ctx context.Context, routeUsername, password, remoteAddr string) (authResult, error)
 	CreateSession(ctx context.Context, session sessionInfo) (sessionInfo, error)
 	FinishSession(ctx context.Context, sessionID int64, recordingPath string) error
 	GetSetting(ctx context.Context, key string) (string, error)
