@@ -1079,6 +1079,24 @@ func (h *Handler) ProxyFinishNativeRDPSession(c *gin.Context) {
 	httpx.JSON(c, 200, result)
 }
 
+// ProxyFinishActiveNativeRDPSessions marks all active native RDP sessions finished during proxy shutdown.
+func (h *Handler) ProxyFinishActiveNativeRDPSessions(c *gin.Context) {
+	if !h.proxyAuthorized(c) {
+		httpx.Error(c, domain.ErrUnauthorized)
+		return
+	}
+	var req service.NativeRDPSessionFinishInput
+	if !middleware.RequireJSON(c, &req) {
+		return
+	}
+	result, err := h.NativeRDP.FinishActiveSessions(req)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	httpx.JSON(c, 200, result)
+}
+
 // ProxyCreateSession 供代理组件创建 SSH 会话记录
 // 认证方式：通过 X-Proxy-Auth 请求头进行代理认证
 // 请求体为 domain.Session 结构，包含用户、资产、账户、协议等会话元数据

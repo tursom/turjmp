@@ -146,3 +146,35 @@ func TestAPIClientNativeRDPSessionStartAndFinish(t *testing.T) {
 		t.Fatalf("unexpected session: %#v", session)
 	}
 }
+
+func TestAPIClientFinishActiveNativeRDPSessions(t *testing.T) {
+	var gotPath string
+	var gotSecret string
+	var gotBody struct {
+		Reason string `json:"reason"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotSecret = r.Header.Get("X-Proxy-Auth")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"reason":"proxy_shutdown","finished":[77],"skipped":[]}}`))
+	}))
+	defer server.Close()
+
+	client := NewAPIClient(config.Config{
+		ProxyAuth: config.ProxyAuthConfig{Secret: "proxy-secret"},
+		Proxy:     config.ProxyConfig{APIBaseURL: server.URL},
+	})
+	if err := client.FinishActiveNativeRDPSessions(t.Context(), "proxy_shutdown"); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/api/v1/proxy/rdp-native/sessions/finish-active" || gotSecret != "proxy-secret" {
+		t.Fatalf("path=%q secret=%q", gotPath, gotSecret)
+	}
+	if gotBody.Reason != "proxy_shutdown" {
+		t.Fatalf("reason=%q", gotBody.Reason)
+	}
+}

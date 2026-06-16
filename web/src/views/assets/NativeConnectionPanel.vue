@@ -107,13 +107,13 @@
           <el-descriptions-item label="代理地址">
             {{ result.host }}:{{ result.port }}
           </el-descriptions-item>
-          <el-descriptions-item label="过期时间">
+          <el-descriptions-item v-if="!resultIsNativeRDP" label="过期时间">
             {{ formatDate(result.expires_at) }}
           </el-descriptions-item>
           <el-descriptions-item label="文件名">
             {{ result.filename || '—' }}
           </el-descriptions-item>
-          <el-descriptions-item label="剩余有效期">
+          <el-descriptions-item v-if="!resultIsNativeRDP" label="剩余有效期">
             {{ formatTTL(result.expires_in) }}
           </el-descriptions-item>
         </el-descriptions>
@@ -192,9 +192,12 @@ const protocolOptions = computed<NativeProtocol[]>(() => {
 
 const accountOptions = computed(() => accounts.value.filter((account) => account.is_active))
 const selectedAccount = computed(() => accountOptions.value.find((account) => account.id === form.accountId))
-const selectedProtocolRequiresCredential = computed(() => form.protocol === 'rdp' && !rdpCredentialReady.value)
+const resultIsNativeRDP = computed(() => result.value?.protocol === 'rdp' && result.value.connect_method === 'rdp_client')
 const rdpCredentialReady = computed(() => (
   rdpCredential.value?.configured === true && rdpCredential.value.enabled === true
+))
+const selectedProtocolRequiresCredential = computed(() => (
+  form.protocol === 'rdp' && rdpCredential.value !== null && !rdpCredentialReady.value
 ))
 const disabledReason = computed(() => {
   if (!props.asset.is_active) return '资产已停用，不能生成原生连接信息'
@@ -202,10 +205,6 @@ const disabledReason = computed(() => {
   if (!form.accountId) return '请选择账号'
   if (!selectedAccount.value) return '当前资产没有可用账号'
   if (form.protocol === 'rdp') {
-    if (rdpCredentialLoading.value) return '正在检查 RDP 代理密码状态'
-    if (rdpCredentialError.value) return rdpCredentialError.value
-    if (!rdpCredential.value?.configured) return '当前用户尚未设置 RDP 代理密码'
-    if (!rdpCredential.value.enabled) return '当前用户的 RDP 代理密码已禁用'
     if (selectedAccount.value.secret_type !== 'password') return 'RDP 原生连接仅支持密码类型账号'
   }
   return ''
@@ -213,7 +212,7 @@ const disabledReason = computed(() => {
 const generateDisabled = computed(() => generating.value || disabledReason.value !== '')
 const resultPreview = computed(() => {
   if (!result.value) return ''
-  if (result.value.protocol === 'rdp' && result.value.connect_method === 'rdp_client') {
+  if (resultIsNativeRDP.value) {
     return result.value.content || `${result.value.host}:${result.value.port}`
   }
   return result.value.command
@@ -317,12 +316,31 @@ async function generateConnection() {
   if (generateDisabled.value || !form.protocol || form.accountId === undefined) return
   generating.value = true
   try {
-    result.value = await tokensApi.createSDKUrl({
+    const next = await tokensApi.createSDKUrl({
       asset_id: props.asset.id,
       account_id: form.accountId,
       protocol: form.protocol,
       proxy_host: form.proxyHost || undefined,
     })
+    if (next.protocol === 'rdp' && next.connect_method === 'rdp_client' && !rdpCredentialReady.value) {
+      result.value = null
+      await loadRDPCredentialStatus()
+      if (rdpCredentialError.value) {
+        ElMessage.error(rdpCredentialError.value)
+        return
+      }
+      if (rdpCredentialReady.value) {
+        result.value = next
+        return
+      }
+      ElMessage.warning(
+        rdpCredential.value?.configured
+          ? '当前用户的 RDP 代理密码已禁用'
+          : '当前用户尚未设置 RDP 代理密码',
+      )
+      return
+    }
+    result.value = next
   } catch (err: unknown) {
     ElMessage.error(err instanceof Error ? err.message : '生成连接信息失败')
   } finally {

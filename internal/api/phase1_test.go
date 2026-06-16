@@ -925,6 +925,69 @@ func TestPhase1ProxyNativeRDPSessionLifecycle(t *testing.T) {
 	}
 }
 
+func TestPhase1ProxyFinishActiveNativeRDPSessions(t *testing.T) {
+	env := newPhase1APITestEnv(t)
+	box := phase1APISecretBox(t, env.cfg)
+	user, asset, account := createPhase1APIRDPResolveFixture(t, env.store, box)
+	body := gin.H{
+		"route_username": fmt.Sprintf("%s#%d#%d", user.Username, asset.ID, account.ID),
+		"password":       "front-rdp-pass",
+		"remote_addr":    "203.0.113.10:50000",
+	}
+
+	startResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/proxy/rdp-native/sessions/start", body, phase1ProxyHeader(env.cfg.ProxyAuth.Secret))
+	if startResp.Code != http.StatusCreated {
+		t.Fatalf("native rdp start status=%d body=%s", startResp.Code, startResp.Body.String())
+	}
+	started := phase1DecodeData[service.NativeRDPSessionStartResult](t, startResp)
+
+	webSession := domain.Session{
+		UserID:     user.ID,
+		AssetID:    asset.ID,
+		AccountID:  account.ID,
+		Protocol:   "rdp",
+		Type:       "rdp",
+		LoginFrom:  "web_rdp",
+		RemoteAddr: "203.0.113.20:50000",
+	}
+	if err := env.store.CreateSession(&webSession); err != nil {
+		t.Fatal(err)
+	}
+
+	unauthorized := phase1Request(t, env.router, http.MethodPost, "/api/v1/proxy/rdp-native/sessions/finish-active", gin.H{
+		"reason": "proxy_shutdown",
+	}, nil)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("finish active without auth status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+
+	finishResp := phase1Request(t, env.router, http.MethodPost, "/api/v1/proxy/rdp-native/sessions/finish-active", gin.H{
+		"reason": "proxy_shutdown",
+	}, phase1ProxyHeader(env.cfg.ProxyAuth.Secret))
+	if finishResp.Code != http.StatusOK {
+		t.Fatalf("finish active status=%d body=%s", finishResp.Code, finishResp.Body.String())
+	}
+	cleanup := phase1DecodeData[service.NativeRDPSessionCleanupResult](t, finishResp)
+	if cleanup.Reason != "proxy_shutdown" || len(cleanup.Finished) != 1 || cleanup.Finished[0] != started.SessionID {
+		t.Fatalf("unexpected cleanup result: %#v", cleanup)
+	}
+
+	nativeSession, err := env.store.GetSession(started.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !nativeSession.IsFinished || nativeSession.DateEnd == nil {
+		t.Fatalf("native session was not finished: %#v", nativeSession)
+	}
+	stillWeb, err := env.store.GetSession(webSession.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillWeb.IsFinished {
+		t.Fatalf("web rdp session should remain active: %#v", stillWeb)
+	}
+}
+
 type phase1APITestEnv struct {
 	router   http.Handler
 	db       *repository.DB

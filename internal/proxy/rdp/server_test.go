@@ -17,12 +17,14 @@ import (
 )
 
 type fakeAPI struct {
-	auth         authResult
-	verifyErr    error
-	createErr    error
-	finishErr    error
-	finishedID   int64
-	finishedPath string
+	auth                  authResult
+	verifyErr             error
+	createErr             error
+	finishErr             error
+	finishedID            int64
+	finishedPath          string
+	activeFinishReason    string
+	activeFinishCallCount int
 }
 
 func (f *fakeAPI) VerifyConnectionToken(_ context.Context, token, remoteAddr string) (authResult, error) {
@@ -61,6 +63,12 @@ func (f *fakeAPI) StartNativeRDPSession(_ context.Context, routeUsername, passwo
 
 func (f *fakeAPI) FinishNativeRDPSession(_ context.Context, sessionID int64, reason string) error {
 	f.finishedID = sessionID
+	return f.finishErr
+}
+
+func (f *fakeAPI) FinishActiveNativeRDPSessions(_ context.Context, reason string) error {
+	f.activeFinishReason = reason
+	f.activeFinishCallCount++
 	return f.finishErr
 }
 
@@ -303,6 +311,19 @@ func TestHealthReportsNativeDisabled(t *testing.T) {
 	}
 	if body.Status != "ready" || body.Components["web_rdp"].Status != "ready" || body.Components["native_rdp"].Status != "disabled" {
 		t.Fatalf("unexpected body: %#v", body)
+	}
+}
+
+func TestStopFinishesActiveNativeSessions(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Proxy.RDP.NativeEnabled = true
+	api := &fakeAPI{}
+	srv := NewServerWithDeps(cfg, api, &memoryStorage{})
+
+	srv.Stop()
+
+	if api.activeFinishCallCount != 1 || api.activeFinishReason != "proxy_shutdown" {
+		t.Fatalf("active native cleanup calls=%d reason=%q", api.activeFinishCallCount, api.activeFinishReason)
 	}
 }
 

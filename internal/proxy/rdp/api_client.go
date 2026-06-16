@@ -158,6 +158,13 @@ func (c *APIClient) FinishNativeRDPSession(ctx context.Context, sessionID int64,
 	}, nil)
 }
 
+// FinishActiveNativeRDPSessions marks all active native RDP sessions complete during proxy shutdown.
+func (c *APIClient) FinishActiveNativeRDPSessions(ctx context.Context, reason string) error {
+	return c.post(ctx, "/api/v1/proxy/rdp-native/sessions/finish-active", map[string]any{
+		"reason": reason,
+	}, nil)
+}
+
 // CreateSession creates an audited RDP session record.
 func (c *APIClient) CreateSession(ctx context.Context, session sessionInfo) (sessionInfo, error) {
 	var out struct {

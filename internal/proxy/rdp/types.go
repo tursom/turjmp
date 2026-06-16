@@ -58,6 +58,7 @@ type apiClient interface {
 	ResolveNativeRDP(ctx context.Context, routeUsername, password, remoteAddr string) (authResult, error)
 	StartNativeRDPSession(ctx context.Context, routeUsername, password, remoteAddr string) (nativeSessionInfo, error)
 	FinishNativeRDPSession(ctx context.Context, sessionID int64, reason string) error
+	FinishActiveNativeRDPSessions(ctx context.Context, reason string) error
 	CreateSession(ctx context.Context, session sessionInfo) (sessionInfo, error)
 	FinishSession(ctx context.Context, sessionID int64, recordingPath string) error
 	GetSetting(ctx context.Context, key string) (string, error)

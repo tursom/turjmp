@@ -84,6 +84,13 @@ type NativeRDPSessionFinishResult struct {
 	Reason    string `json:"reason"`
 }
 
+// NativeRDPSessionCleanupResult reports proxy-shutdown cleanup for active native RDP sessions.
+type NativeRDPSessionCleanupResult struct {
+	Reason   string  `json:"reason"`
+	Finished []int64 `json:"finished"`
+	Skipped  []int64 `json:"skipped,omitempty"`
+}
+
 func (e *NativeRDPResolveError) Error() string {
 	if e == nil {
 		return ""
@@ -247,6 +254,28 @@ func (s *NativeRDPResolverService) FinishSession(sessionID int64, input NativeRD
 		}))
 	}
 	return NativeRDPSessionFinishResult{SessionID: session.ID, Finished: changed, Reason: reason}, nil
+}
+
+// FinishActiveSessions marks all active native RDP client sessions complete for proxy shutdown cleanup.
+func (s *NativeRDPResolverService) FinishActiveSessions(input NativeRDPSessionFinishInput) (NativeRDPSessionCleanupResult, error) {
+	reason := sanitizeNativeRDPReason(input.Reason)
+	ids, err := s.store.ListActiveNativeRDPSessionIDs()
+	if err != nil {
+		return NativeRDPSessionCleanupResult{}, err
+	}
+	result := NativeRDPSessionCleanupResult{Reason: reason, Finished: []int64{}, Skipped: []int64{}}
+	for _, id := range ids {
+		finished, err := s.FinishSession(id, NativeRDPSessionFinishInput{Reason: reason})
+		if err != nil {
+			return NativeRDPSessionCleanupResult{}, err
+		}
+		if finished.Finished {
+			result.Finished = append(result.Finished, id)
+		} else {
+			result.Skipped = append(result.Skipped, id)
+		}
+	}
+	return result, nil
 }
 
 func nativeRDPResolveDenied(reason string, err error) error {

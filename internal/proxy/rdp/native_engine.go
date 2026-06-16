@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/tursom/turjmp/internal/config"
@@ -140,9 +141,20 @@ func (h *NativeEngineHandle) Stop() error {
 		if h.cmd == nil || h.cmd.Process == nil {
 			return
 		}
-		err = h.cmd.Process.Kill()
+		err = h.cmd.Process.Signal(syscall.SIGTERM)
 		if errors.Is(err, os.ErrProcessDone) {
 			err = nil
+		}
+		if err != nil {
+			return
+		}
+		select {
+		case <-h.exited:
+		case <-time.After(5 * time.Second):
+			err = h.cmd.Process.Kill()
+			if errors.Is(err, os.ErrProcessDone) {
+				err = nil
+			}
 		}
 	})
 	return err
@@ -181,7 +193,15 @@ type nativeCommand interface {
 type osCommandRunner struct{}
 
 func (osCommandRunner) CommandContext(ctx context.Context, name string, args ...string) nativeCommand {
-	return &execNativeCommand{cmd: exec.CommandContext(ctx, name, args...)}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = 5 * time.Second
+	return &execNativeCommand{cmd: cmd}
 }
 
 type execNativeCommand struct {

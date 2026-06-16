@@ -94,7 +94,7 @@ func (s *Server) Start(ctx context.Context) error {
 		errCh <- s.http.ListenAndServe()
 	}()
 	cleanup := func() error {
-		s.stopNativeEngine()
+		s.stopNativeEngine("proxy_shutdown")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout())
 		defer cancel()
 		if err := s.http.Shutdown(shutdownCtx); err != nil {
@@ -119,7 +119,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 // Stop shuts down the RDP listener without waiting for the parent context.
 func (s *Server) Stop() {
-	s.stopNativeEngine()
+	s.stopNativeEngine("proxy_shutdown")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout())
 	defer cancel()
 	_ = s.http.Shutdown(shutdownCtx)
@@ -131,11 +131,16 @@ func (s *Server) setNativeHandle(handle *NativeEngineHandle) {
 	s.native = handle
 }
 
-func (s *Server) stopNativeEngine() {
+func (s *Server) stopNativeEngine(reason string) {
 	s.mu.Lock()
 	handle := s.native
 	s.native = nil
 	s.mu.Unlock()
+	if s.cfg.Proxy.RDP.NativeEnabled && s.api != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout())
+		defer cancel()
+		_ = s.api.FinishActiveNativeRDPSessions(ctx, reason)
+	}
 	if handle != nil {
 		_ = handle.Stop()
 	}

@@ -706,6 +706,21 @@ func (s *Store) FinishSessionOnce(id int64, recordingPath string) (domain.Sessio
 	return existing, false, nil
 }
 
+// ListActiveNativeRDPSessionIDs returns unfinished native RDP session IDs for proxy shutdown cleanup.
+func (s *Store) ListActiveNativeRDPSessionIDs() ([]int64, error) {
+	var ids []int64
+	q := s.query(`SELECT id FROM sessions
+		WHERE is_finished = ? AND protocol = ? AND type = ? AND login_from = ?
+		ORDER BY id`)
+	if err := s.db.Select(&ids, q, false, "rdp", "rdp", "rdp_client"); err != nil {
+		return nil, err
+	}
+	if ids == nil {
+		ids = []int64{}
+	}
+	return ids, nil
+}
+
 // GetSession 按 ID 查询会话记录，未找到时返回 domain.ErrNotFound。
 func (s *Store) GetSession(id int64) (domain.Session, error) {
 	var sess domain.Session
